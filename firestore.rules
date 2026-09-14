@@ -1,0 +1,122 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net - Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // User Profile
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // Users cannot be scraped in lists
+      allow create: if isOwner(userId)
+                    && request.resource.data.id == userId
+                    && (request.resource.data.accountType == 'user' || request.resource.data.accountType == 'guest');
+      allow update: if isOwner(userId)
+                    && request.resource.data.id == userId
+                    && request.resource.data.accountType == resource.data.accountType;
+      allow delete: if isOwner(userId);
+
+      // Subcollection: Projects
+      match /projects/{projectId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId)
+                      && isValidId(projectId)
+                      && request.resource.data.ownerId == userId
+                      && request.resource.data.name is string
+                      && request.resource.data.name.size() > 0
+                      && request.resource.data.name.size() <= 128;
+        allow update: if isOwner(userId)
+                      && request.resource.data.ownerId == resource.data.ownerId
+                      && request.resource.data.name is string
+                      && request.resource.data.name.size() > 0
+                      && request.resource.data.name.size() <= 128;
+        allow delete: if isOwner(userId);
+      }
+
+      // Subcollection: Ideas
+      match /ideas/{ideaId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId)
+                      && isValidId(ideaId)
+                      && request.resource.data.ownerId == userId
+                      && request.resource.data.title is string
+                      && request.resource.data.title.size() > 0
+                      && request.resource.data.title.size() <= 300;
+        allow update: if isOwner(userId)
+                      && request.resource.data.ownerId == resource.data.ownerId
+                      && request.resource.data.title is string
+                      && request.resource.data.title.size() > 0
+                      && request.resource.data.title.size() <= 300;
+        allow delete: if isOwner(userId);
+      }
+
+      // Subcollection: Scripts
+      match /scripts/{scriptId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId)
+                      && isValidId(scriptId)
+                      && request.resource.data.ownerId == userId
+                      && request.resource.data.title is string
+                      && request.resource.data.title.size() > 0
+                      && request.resource.data.title.size() <= 300;
+        allow update: if isOwner(userId)
+                      && request.resource.data.ownerId == resource.data.ownerId
+                      && request.resource.data.title is string
+                      && request.resource.data.title.size() > 0
+                      && request.resource.data.title.size() <= 300;
+        allow delete: if isOwner(userId);
+      }
+
+      // Subcollection: Competitors
+      match /competitors/{competitorId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId)
+                      && isValidId(competitorId)
+                      && request.resource.data.ownerId == userId
+                      && request.resource.data.channelName is string
+                      && request.resource.data.channelName.size() > 0
+                      && request.resource.data.channelName.size() <= 128;
+        allow update: if isOwner(userId)
+                      && request.resource.data.ownerId == resource.data.ownerId
+                      && request.resource.data.channelName is string
+                      && request.resource.data.channelName.size() > 0
+                      && request.resource.data.channelName.size() <= 128;
+        allow delete: if isOwner(userId);
+      }
+
+      // Subcollection: Settings
+      match /settings/{settingId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+                              && isValidId(settingId);
+        allow delete: if isOwner(userId);
+      }
+
+      // Subcollection: YouTube Connection (standby)
+      match /youtubeConnections/{connectionId} {
+        allow read, write: if isOwner(userId) && isValidId(connectionId);
+      }
+
+      // Subcollection: Analytics Snapshots (standby)
+      match /analyticsSnapshots/{snapshotId} {
+        allow read, write: if isOwner(userId) && isValidId(snapshotId);
+      }
+    }
+  }
+}
