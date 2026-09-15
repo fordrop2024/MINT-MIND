@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    letter-spacing: -0.01em;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.025em;
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Theme variables and styles */
+.theme-dark {
+  --bg-primary: #07090e;
+  --bg-secondary: #0d121d;
+  --bg-surface: #121826;
+  --bg-surface-elevated: #182235;
+  --border-color: rgba(56, 189, 248, 0.14);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent-cyan: #38bdf8;
+  --accent-cyan-glow: rgba(56, 189, 248, 0.25);
+  --accent-indigo: #818cf8;
+  --panel-glass: rgba(13, 18, 29, 0.75);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.theme-light {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #f1f5f9;
+  --bg-surface: #ffffff;
+  --bg-surface-elevated: #ffffff;
+  --border-color: rgba(14, 165, 233, 0.22);
+  --border-subtle: rgba(148, 163, 184, 0.2);
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --accent-cyan: #0284c7;
+  --accent-cyan-glow: rgba(2, 132, 199, 0.15);
+  --accent-indigo: #4f46e5;
+  --panel-glass: rgba(255, 255, 255, 0.85);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.theme-mix {
+  --bg-primary: #0b0f19;
+  --bg-secondary: #111827;
+  --bg-surface: #1e293b;
+  --bg-surface-elevated: #0f172a;
+  --border-color: rgba(99, 102, 241, 0.28);
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #64748b;
+  --accent-cyan: #22d3ee;
+  --accent-cyan-glow: rgba(34, 211, 238, 0.2);
+  --accent-indigo: #a5b4fc;
+  --panel-glass: rgba(17, 24, 39, 0.8);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* Subtle futuristic background grid pattern */
+.cyber-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(56, 189, 248, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(56, 189, 248, 0.035) 1px, transparent 1px);
+}
+
+.theme-light .cyber-grid {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(14, 165, 233, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(14, 165, 233, 0.045) 1px, transparent 1px);
+}
+
+/* Glassmorphism panels */
+.glass-panel {
+  background-color: var(--panel-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle);
+}
+
+.glass-panel-interactive {
+  background-color: var(--panel-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel-interactive:hover {
+  border-color: var(--border-color);
+  box-shadow: 0 0 20px -5px var(--accent-cyan-glow);
+}
+
+/* Custom cyber scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.4);
+}

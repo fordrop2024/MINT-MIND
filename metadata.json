@@ -1,0 +1,6 @@
+{
+  "name": "MintMind AI",
+  "description": "MintMind AI - AI Content Operating System. Your AI-powered creator workspace for ideas, scripts, videos, SEO and publishing. Think. Create. Publish.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

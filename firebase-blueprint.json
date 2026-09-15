@@ -1,0 +1,176 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated or guest creator account profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique user ID matching auth UID" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "email": { "type": "string", "format": "email", "description": "User primary email address" },
+        "photoURL": { "type": "string", "description": "Avatar image URL" },
+        "createdAt": { "type": "string", "description": "Timestamp when account profile was created" },
+        "lastLoginAt": { "type": "string", "description": "Timestamp of most recent authentication session" },
+        "accountType": { "type": "string", "enum": ["user", "guest"], "description": "Account authorization tier" },
+        "preferences": { "type": "object", "description": "User configuration preferences" }
+      },
+      "required": ["id", "accountType", "createdAt"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Creator workspace project container",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique project identifier" },
+        "name": { "type": "string", "maxLength": 128, "description": "Project title" },
+        "description": { "type": "string", "maxLength": 1000, "description": "Project summary" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last modified timestamp" },
+        "ownerId": { "type": "string", "description": "UID of the project owner" }
+      },
+      "required": ["id", "name", "ownerId", "createdAt", "updatedAt"]
+    },
+    "Competitor": {
+      "title": "Competitor",
+      "description": "Tracked YouTube competitor channel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique competitor record identifier" },
+        "ownerId": { "type": "string", "description": "UID of the user tracking this competitor" },
+        "channelName": { "type": "string", "maxLength": 128, "description": "Name of competitor channel" },
+        "channelId": { "type": "string", "maxLength": 128, "description": "YouTube channel ID" },
+        "channelUrl": { "type": "string", "maxLength": 512, "description": "Web URL to YouTube channel" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last modified timestamp" }
+      },
+      "required": ["id", "ownerId", "channelName", "createdAt", "updatedAt"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User workspace settings and theme choices",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Settings document ID" },
+        "theme": { "type": "string", "enum": ["dark", "light", "mix"], "description": "Selected UI theme" },
+        "language": { "type": "string", "description": "User interface language" },
+        "notifications": { "type": "boolean", "description": "Notification preference" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["theme", "updatedAt"]
+    },
+    "YouTubeConnection": {
+      "title": "YouTubeConnection",
+      "description": "Future YouTube channel credentials and tokens (standby)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Connection identifier" },
+        "channelId": { "type": "string", "description": "Connected YouTube channel ID" },
+        "status": { "type": "string", "enum": ["not_connected", "connected", "expired"], "description": "Connection state" },
+        "updatedAt": { "type": "string", "description": "Timestamp of connection update" }
+      },
+      "required": ["id", "status"]
+    },
+    "AnalyticsSnapshot": {
+      "title": "AnalyticsSnapshot",
+      "description": "Periodic snapshot of creator performance metrics (standby)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Snapshot identifier" },
+        "capturedAt": { "type": "string", "description": "Timestamp when snapshot was recorded" },
+        "metrics": { "type": "object", "description": "Aggregated metrics container" }
+      },
+      "required": ["id", "capturedAt"]
+    },
+    "Idea": {
+      "title": "Idea",
+      "description": "Creator AI generated or custom content ideas",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique idea identifier" },
+        "ownerId": { "type": "string", "description": "UID of idea owner" },
+        "projectId": { "type": "string", "description": "Associated project ID" },
+        "title": { "type": "string", "maxLength": 300, "description": "Idea title" },
+        "concept": { "type": "string", "maxLength": 4000, "description": "Core idea concept description" },
+        "angle": { "type": "string", "maxLength": 500, "description": "Content angle or framing" },
+        "hook": { "type": "string", "maxLength": 1000, "description": "Opening viral hook statement" },
+        "targetAudience": { "type": "string", "maxLength": 300, "description": "Target audience segment" },
+        "contentType": { "type": "string", "maxLength": 100, "description": "Format/category of content" },
+        "recommendedPlatform": { "type": "string", "maxLength": 100, "description": "Platform tailored for" },
+        "estimatedDuration": { "type": "string", "maxLength": 100, "description": "Estimated runtime" },
+        "trendScore": { "type": "number", "description": "CREOVA trend index 0-100" },
+        "audienceInterestScore": { "type": "number", "description": "Audience demand score 0-100" },
+        "competitionScore": { "type": "number", "description": "Topic saturation score 0-100" },
+        "opportunityScore": { "type": "number", "description": "Aggregate opportunity rating 0-100" },
+        "reason": { "type": "string", "maxLength": 2000, "description": "Strategic reason why this idea works" },
+        "keywords": { "type": "string", "description": "Comma-separated or JSON keywords" },
+        "hashtags": { "type": "string", "description": "Target hashtags" },
+        "thumbnailConcept": { "type": "string", "maxLength": 2000, "description": "Visual packaging recommendation" },
+        "cta": { "type": "string", "maxLength": 500, "description": "Call to action text" },
+        "status": { "type": "string", "enum": ["draft", "saved", "scripted", "produced", "published"], "description": "Workflow lifecycle state" },
+        "metadata": { "type": "object", "description": "Additional generation parameters and contextual flags" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["id", "ownerId", "title", "status", "createdAt", "updatedAt"]
+    },
+    "Script": {
+      "title": "Script",
+      "description": "Structured, scene-by-scene editable content scripts with versions and media assets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique script identifier" },
+        "ownerId": { "type": "string", "description": "UID of script owner" },
+        "projectId": { "type": "string", "description": "Associated project ID" },
+        "ideaId": { "type": "string", "description": "Source idea identifier if converted" },
+        "title": { "type": "string", "maxLength": 300, "description": "Script title" },
+        "type": { "type": "string", "maxLength": 100, "description": "Format type (Long-form, Short, Reel, Story, etc.)" },
+        "status": { "type": "string", "description": "Lifecycle state (draft, saved, in_review, ready)" },
+        "settings": { "type": "object", "description": "Script generation inputs and narration/cta configurations" },
+        "sections": { "type": "string", "description": "JSON string or list of editable structural script sections" },
+        "scenes": { "type": "string", "description": "JSON string or list of scene-by-scene breakdowns with prompts and assets" },
+        "versions": { "type": "string", "description": "JSON string of historical snapshot versions" },
+        "currentVersionNumber": { "type": "number", "description": "Active version pointer" },
+        "seo": { "type": "object", "description": "Platform SEO metadata" },
+        "thumbnailConcepts": { "type": "string", "description": "Generated thumbnail directions" },
+        "repurposeVersions": { "type": "object", "description": "Repurposed Short/Reel/Story adaptations" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["id", "ownerId", "title", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Primary user profile document owned by the authenticated user"
+    },
+    "/users/{userId}/projects/{projectId}": {
+      "schema": "Project",
+      "description": "User-owned workspace projects"
+    },
+    "/users/{userId}/ideas/{ideaId}": {
+      "schema": "Idea",
+      "description": "User-owned generated and curated content ideas"
+    },
+    "/users/{userId}/scripts/{scriptId}": {
+      "schema": "Script",
+      "description": "User-owned structured and scene-by-scene script documents"
+    },
+    "/users/{userId}/competitors/{competitorId}": {
+      "schema": "Competitor",
+      "description": "User-owned tracked competitor channels"
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": "UserSettings",
+      "description": "User-owned preferences and theme configuration"
+    },
+    "/users/{userId}/youtubeConnections/{connectionId}": {
+      "schema": "YouTubeConnection",
+      "description": "User-owned YouTube connection records (standby)"
+    },
+    "/users/{userId}/analyticsSnapshots/{snapshotId}": {
+      "schema": "AnalyticsSnapshot",
+      "description": "User-owned historical analytics snapshots (standby)"
+    }
+  }
+}
