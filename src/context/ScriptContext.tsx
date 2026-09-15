@@ -240,6 +240,40 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
       const scriptId = `script_${Date.now()}`;
       const now = new Date().toISOString();
 
+      // Normalize sections ensuring content and order are guaranteed
+      const normalizedSections: ScriptSection[] = (result.sections || []).map((sec: any, idx: number) => ({
+        id: sec.id || `sec_${idx + 1}`,
+        name: sec.name || `Section ${idx + 1}`,
+        content: sec.content || sec.narration || '',
+        order: typeof sec.order === 'number' ? sec.order : idx + 1,
+      }));
+
+      // Normalize scenes ensuring durationSec, voiceover, sfx, and visualDescription are guaranteed
+      const normalizedScenes: ScriptScene[] = (result.scenes || []).map((sc: any, idx: number) => {
+        const rawDurSec = typeof sc.durationSec === 'number' 
+          ? sc.durationSec 
+          : typeof sc.duration === 'number' 
+            ? sc.duration 
+            : parseInt(String(sc.duration || '5'), 10) || 5;
+
+        return {
+          sceneNumber: typeof sc.sceneNumber === 'number' ? sc.sceneNumber : idx + 1,
+          duration: `${rawDurSec}s`,
+          durationSec: rawDurSec,
+          voiceover: sc.voiceover || sc.spokenDialogue || '',
+          visualDescription: sc.visualDescription || sc.action || '',
+          bRollSuggestion: sc.bRollSuggestion || '',
+          onScreenText: sc.onScreenText || '',
+          cameraDirection: sc.cameraDirection || sc.shotType || 'Medium Shot',
+          transition: sc.transition || 'Cut',
+          sfxMusic: sc.sfxMusic || sc.sfx || '',
+          sfx: sc.sfx || sc.sfxMusic || '',
+          generatedImage: sc.generatedImage,
+          generatedVideo: sc.generatedVideo,
+          generatedVoice: sc.generatedVoice,
+        };
+      });
+
       const newScript: Script = {
         id: scriptId,
         ownerId: user?.id || 'guest',
@@ -249,15 +283,15 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         type: payload.platform,
         status: 'draft',
         settings: payload,
-        sections: result.sections || [],
-        scenes: result.scenes || [],
+        sections: normalizedSections,
+        scenes: normalizedScenes,
         versions: [
           {
             versionNumber: 1,
             timestamp: now,
             title: result.title || payload.topic,
-            sections: result.sections || [],
-            scenes: result.scenes || [],
+            sections: normalizedSections,
+            scenes: normalizedScenes,
             summaryNote: 'Initial AI script generation',
           },
         ],

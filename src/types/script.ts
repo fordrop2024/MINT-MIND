@@ -39,6 +39,7 @@ export interface ScriptSection {
 export interface ScriptScene {
   sceneNumber: number;
   duration: string;
+  durationSec?: number;
   voiceover: string;
   visualDescription: string;
   bRollSuggestion: string;
@@ -46,6 +47,7 @@ export interface ScriptScene {
   cameraDirection: string;
   transition: string;
   sfxMusic: string;
+  sfx?: string;
   generatedImage?: string;
   generatedVideo?: {
     status: 'idle' | 'generating' | 'ready' | 'failed';

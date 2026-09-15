@@ -20,78 +20,138 @@ export interface AIStatus {
   provider: string;
 }
 
+/**
+ * Robust JSON fetcher with retry logic, Content-Type validation,
+ * and friendly error messaging to completely prevent SyntaxError on HTML responses.
+ */
+async function safeFetchJSON(url: string, options?: RequestInit, retries = 1): Promise<any> {
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      const contentType = res.headers.get('content-type') || '';
+
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        if (!res.ok) {
+          throw new Error(`Server error (${res.status}): ${text.slice(0, 160) || res.statusText}`);
+        }
+        throw new Error(`Unexpected server response format (expected JSON, received ${contentType || 'non-JSON'}).`);
+      }
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error || `Request failed with status ${res.status}`);
+      }
+      return data;
+    } catch (err: any) {
+      lastError = err;
+      const isNetworkFetchError =
+        (err.name === 'TypeError' && err.message?.includes('fetch')) ||
+        err.message?.includes('Failed to fetch') ||
+        err.message?.includes('NetworkError');
+
+      if (isNetworkFetchError && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+      break;
+    }
+  }
+
+  const message = String(lastError?.message || '');
+  if (message.includes('Failed to fetch') || message.includes('NetworkError')) {
+    throw new Error('Could not connect to the AI server. Please check your network and try again.');
+  }
+
+  throw lastError;
+}
+
 export async function checkAIStatus(): Promise<AIStatus> {
   try {
     const res = await fetch('/api/ai/status');
     if (!res.ok) throw new Error('Status request failed');
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) throw new Error('Non-JSON response');
     return await res.json();
   } catch {
     return {
       configured: false,
-      textModel: 'gemini-3.8-flash',
+      textModel: 'gemini-3.5-flash-lite',
       provider: 'Google Gemini (standby)',
     };
   }
 }
 
 export async function generateIdeasAPI(inputs: IdeaGenerationInputs): Promise<Idea[]> {
-  const res = await fetch('/api/ai/generate-ideas', {
+  const data = await safeFetchJSON('/api/ai/generate-ideas', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(inputs),
   });
 
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to generate ideas with Gemini.');
-  }
+  return (data.ideas || []).map((item: any, idx: number) => {
+    const coreConcept = item.coreConcept || item.concept || '';
+    const uniqueAngle = item.uniqueAngle || item.angle || '';
+    const whyThisIdea = item.whyThisIdea || item.reason || '';
+    const trend = typeof item.trendRelevance === 'number' ? item.trendRelevance : (typeof item.trendScore === 'number' ? item.trendScore : 82);
+    const audience = typeof item.audienceInterest === 'number' ? item.audienceInterest : (typeof item.audienceInterestScore === 'number' ? item.audienceInterestScore : 85);
+    const comp = typeof item.competition === 'number' ? item.competition : (typeof item.competitionScore === 'number' ? item.competitionScore : 45);
+    const opp = typeof item.opportunityScore === 'number' ? item.opportunityScore : 84;
 
-  return (data.ideas || []).map((item: any, idx: number) => ({
-    id: `idea_${Date.now()}_${idx}`,
-    ownerId: '',
-    projectId: inputs.projectId,
-    title: item.title || 'Untitled Idea',
-    hook: item.hook || '',
-    concept: item.concept || '',
-    angle: item.angle || '',
-    targetAudience: item.targetAudience || inputs.targetAudience,
-    contentType: item.contentType || inputs.contentType,
-    recommendedPlatform: item.recommendedPlatform || inputs.platform,
-    estimatedDuration: item.estimatedDuration || inputs.videoDuration,
-    trendScore: typeof item.trendScore === 'number' ? item.trendScore : 82,
-    audienceInterestScore: typeof item.audienceInterestScore === 'number' ? item.audienceInterestScore : 85,
-    competitionScore: typeof item.competitionScore === 'number' ? item.competitionScore : 45,
-    opportunityScore: typeof item.opportunityScore === 'number' ? item.opportunityScore : 84,
-    reason: item.reason || '',
-    keywords: Array.isArray(item.keywords) ? item.keywords : [],
-    hashtags: Array.isArray(item.hashtags) ? item.hashtags : [],
-    thumbnailConcept: item.thumbnailConcept || '',
-    cta: item.cta || '',
-    status: 'draft',
-    metadata: {
-      niche: inputs.niche,
-      topic: inputs.topic,
-      language: inputs.language,
-      tone: inputs.tone,
-      goal: inputs.goal,
-      referenceContext: inputs.referenceContext,
-    },
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  }));
+    return {
+      id: `idea_${Date.now()}_${idx}`,
+      ownerId: '',
+      projectId: inputs.projectId,
+      title: item.title || 'Untitled Idea',
+      hook: item.hook || '',
+      concept: coreConcept,
+      coreConcept,
+      angle: uniqueAngle,
+      uniqueAngle,
+      targetAudience: item.targetAudience || inputs.targetAudience,
+      contentType: item.contentType || inputs.contentType,
+      recommendedPlatform: item.recommendedPlatform || inputs.platform,
+      estimatedDuration: item.estimatedDuration || inputs.videoDuration,
+      trendScore: trend,
+      trendRelevance: trend,
+      audienceInterestScore: audience,
+      audienceInterest: audience,
+      competitionScore: comp,
+      competition: comp,
+      opportunityScore: opp,
+      reason: whyThisIdea,
+      whyThisIdea,
+      keywords: Array.isArray(item.keywords) ? item.keywords : [],
+      hashtags: Array.isArray(item.hashtags) ? item.hashtags : [],
+      thumbnailConcept: item.thumbnailConcept || '',
+      cta: item.cta || '',
+      status: 'draft' as const,
+      metadata: {
+        niche: inputs.niche,
+        topic: inputs.topic,
+        language: inputs.language,
+        tone: inputs.tone,
+        goal: inputs.goal,
+        currentTrendContext: inputs.currentTrendContext,
+        competitorReference: inputs.competitorReference,
+        keywords: inputs.keywords,
+        userNotes: inputs.userNotes,
+        referenceContext: inputs.referenceContext,
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+  });
 }
 
 export async function analyzeIdeaAPI(idea: Idea): Promise<IdeaAnalysis> {
-  const res = await fetch('/api/ai/analyze-idea', {
+  const data = await safeFetchJSON('/api/ai/analyze-idea', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idea }),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to analyze idea.');
-  }
 
   return {
     ideaId: idea.id,
@@ -114,46 +174,31 @@ export async function analyzeIdeaAPI(idea: Idea): Promise<IdeaAnalysis> {
 }
 
 export async function generateVariationsAPI(idea: Idea): Promise<IdeaVariation[]> {
-  const res = await fetch('/api/ai/generate-variations', {
+  const data = await safeFetchJSON('/api/ai/generate-variations', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idea }),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to generate variations.');
-  }
 
   return data.variations || [];
 }
 
 export async function improveIdeaAPI(idea: Idea): Promise<Partial<Idea>> {
-  const res = await fetch('/api/ai/improve-idea', {
+  const data = await safeFetchJSON('/api/ai/improve-idea', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idea }),
   });
 
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to improve idea.');
-  }
-
   return data.improved || {};
 }
 
 export async function generateScriptAPI(settings: ScriptSettings): Promise<Partial<Script>> {
-  const res = await fetch('/api/ai/generate-script', {
+  const data = await safeFetchJSON('/api/ai/generate-script', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to generate script.');
-  }
 
   return data.script;
 }
@@ -169,16 +214,11 @@ export async function rewriteSectionAPI(params: {
     tone?: string;
   };
 }): Promise<{ modifiedContent: string; explanation: string }> {
-  const res = await fetch('/api/ai/rewrite-section', {
+  const data = await safeFetchJSON('/api/ai/rewrite-section', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to rewrite section.');
-  }
 
   return {
     modifiedContent: data.modifiedContent,
@@ -192,16 +232,11 @@ export async function generateSEOAPI(params: {
   platform: string;
   audience: string;
 }): Promise<ScriptSEO> {
-  const res = await fetch('/api/ai/generate-seo', {
+  const data = await safeFetchJSON('/api/ai/generate-seo', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to generate SEO.');
-  }
 
   return data.seo;
 }
@@ -211,16 +246,11 @@ export async function generateThumbnailsAPI(params: {
   concept: string;
   platform: string;
 }): Promise<ThumbnailConcept[]> {
-  const res = await fetch('/api/ai/generate-thumbnails', {
+  const data = await safeFetchJSON('/api/ai/generate-thumbnails', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to generate thumbnail concepts.');
-  }
 
   return data.thumbnails || [];
 }
@@ -230,16 +260,11 @@ export async function repurposeScriptAPI(params: {
   title: string;
   topic: string;
 }): Promise<RepurposeVersions> {
-  const res = await fetch('/api/ai/repurpose', {
+  const data = await safeFetchJSON('/api/ai/repurpose', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to repurpose script.');
-  }
 
   return data.repurpose;
 }
@@ -251,16 +276,11 @@ export async function generateContentPackageAPI(params: {
   language?: string;
   audience?: string;
 }): Promise<ContentPackage> {
-  const res = await fetch('/api/ai/generate-content-package', {
+  const data = await safeFetchJSON('/api/ai/generate-content-package', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to generate content package.');
-  }
 
   return data.contentPackage;
 }
@@ -270,16 +290,148 @@ export async function generateSceneImageAPI(params: {
   sceneNumber: number;
   style?: string;
 }): Promise<{ imageUrl: string; provider: string; note?: string }> {
-  const res = await fetch('/api/ai/generate-scene-image', {
+  const data = await safeFetchJSON('/api/ai/generate-scene-image', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
 
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to generate scene image.');
-  }
-
-  return data;
+  return {
+    imageUrl: data.imageUrl,
+    provider: data.provider || 'AI Generated',
+    note: data.note,
+  };
 }
+
+/**
+ * Universal Unified AI Client Operations
+ * Allows any future MintMind AI module (Idea Generator, Script Studio, Research,
+ * Trend Analysis, Story Mode, SEO, Repurpose) to leverage the centralized backend service.
+ */
+
+export type AIOperation =
+  | 'generateText'
+  | 'generateStructuredJSON'
+  | 'analyzeText'
+  | 'rewriteText'
+  | 'summarizeText';
+
+export interface AIOperationPayload {
+  operation: AIOperation;
+  prompt?: string;
+  text?: string;
+  instruction?: string;
+  instructions?: string;
+  tone?: string;
+  maxLength?: string | number;
+  model?: string;
+  systemInstruction?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  responseSchema?: any;
+  [key: string]: any;
+}
+
+export async function executeAIOperation<T = any>(payload: AIOperationPayload): Promise<T> {
+  const data = await safeFetchJSON('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  return (data.data ?? data.text ?? data.analysis ?? data.rewritten ?? data.summary ?? data) as T;
+}
+
+export async function generateTextAI(
+  prompt: string,
+  options?: { systemInstruction?: string; model?: string; temperature?: number; maxOutputTokens?: number }
+): Promise<string> {
+  const data = await safeFetchJSON('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'generateText',
+      prompt,
+      ...options,
+    }),
+  });
+
+  return data.text;
+}
+
+export async function generateStructuredJSONAI<T = any>(
+  prompt: string,
+  options?: { systemInstruction?: string; model?: string; temperature?: number; responseSchema?: any }
+): Promise<T> {
+  const data = await safeFetchJSON('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'generateStructuredJSON',
+      prompt,
+      ...options,
+    }),
+  });
+
+  return data.data as T;
+}
+
+export async function analyzeTextAI(
+  text: string,
+  instructions: string,
+  model?: string
+): Promise<string> {
+  const data = await safeFetchJSON('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'analyzeText',
+      text,
+      instructions,
+      model,
+    }),
+  });
+
+  return data.analysis;
+}
+
+export async function rewriteTextAI(
+  text: string,
+  instruction: string,
+  tone?: string,
+  model?: string
+): Promise<string> {
+  const data = await safeFetchJSON('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'rewriteText',
+      text,
+      instruction,
+      tone,
+      model,
+    }),
+  });
+
+  return data.rewritten;
+}
+
+export async function summarizeTextAI(
+  text: string,
+  maxLength?: string | number,
+  model?: string
+): Promise<string> {
+  const data = await safeFetchJSON('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      operation: 'summarizeText',
+      text,
+      maxLength,
+      model,
+    }),
+  });
+
+  return data.summary;
+}
+

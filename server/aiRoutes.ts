@@ -1,153 +1,348 @@
 import { Router, Request, Response } from 'express';
-import { GoogleGenAI } from '@google/genai';
+import { geminiService, GeminiServiceError } from './services/geminiService.js';
 
 export const aiRouter = Router();
 
-// Lazy initialization of GoogleGenAI client
-function getGenAI(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY environment variable is not set. Please configure it in your Settings.');
-  }
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-}
-
-// Robust JSON extractor for Gemini output
-function extractJson<T>(rawText: string, fallback: T): T {
-  try {
-    const cleaned = rawText
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/gi, '')
-      .trim();
-
-    // Try direct parse
-    try {
-      return JSON.parse(cleaned);
-    } catch {
-      // Find outermost JSON brackets
-      const firstBrace = cleaned.indexOf('{');
-      const firstBracket = cleaned.indexOf('[');
-      let startIndex = -1;
-      let endIndex = -1;
-
-      if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
-        startIndex = firstBrace;
-        endIndex = cleaned.lastIndexOf('}');
-      } else if (firstBracket !== -1) {
-        startIndex = firstBracket;
-        endIndex = cleaned.lastIndexOf(']');
-      }
-
-      if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-        const sliced = cleaned.substring(startIndex, endIndex + 1);
-        return JSON.parse(sliced);
-      }
-    }
-  } catch (err) {
-    console.warn('Failed to parse JSON from AI response:', err, rawText);
-  }
-  return fallback;
-}
-
-// Status endpoint
-aiRouter.get('/status', (req: Request, res: Response) => {
-  const hasKey = Boolean(process.env.GEMINI_API_KEY);
+/**
+ * AI Provider Status
+ * GET /api/ai/status
+ */
+aiRouter.get('/status', (_req: Request, res: Response) => {
+  const status = geminiService.getStatus();
   res.json({
-    configured: hasKey,
-    textModel: 'gemini-3.8-flash',
-    provider: 'Google Gemini',
+    configured: status.configured,
+    textModel: status.model,
+    provider: status.provider,
   });
 });
 
-// 1. Generate Ideas
-aiRouter.post('/generate-ideas', async (req: Request, res: Response) => {
+/**
+ * Universal Unified AI Execution Endpoint
+ * POST /api/ai
+ *
+ * Supports reusable operations for future modules:
+ * - generateText
+ * - generateStructuredJSON
+ * - analyzeText
+ * - rewriteText
+ * - summarizeText
+ */
+aiRouter.post('/', async (req: Request, res: Response) => {
   try {
     const {
-      niche = 'General Tech & Productivity',
-      topic = '',
-      targetAudience = 'Creators and tech enthusiasts',
-      platform = 'YouTube Long-form',
-      contentType = 'Educational',
-      language = 'English',
-      tone = 'Energetic',
-      videoDuration = '8-12 minutes',
-      goal = 'High Views / Reach',
-      referenceContext = '',
-      currentTrendContext = '',
-      competitorReference = '',
-      keywords = [],
-      userNotes = '',
-      count = 4,
+      operation,
+      prompt,
+      text,
+      instruction,
+      instructions,
+      tone,
+      maxLength,
+      model,
+      systemInstruction,
+      temperature,
+      maxOutputTokens,
+      responseSchema,
     } = req.body;
 
-    const ai = getGenAI();
+    if (!operation) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required "operation" in request body.',
+        code: 'BAD_REQUEST',
+      });
+    }
 
-    const prompt = `You are MintMind AI, the elite AI Content Operating System ideation engine.
-Generate ${count} high-performing, original, and deeply researched content ideas based on the following creator inputs:
+    switch (operation) {
+      case 'generateText': {
+        const generated = await geminiService.generateText({
+          prompt: prompt || text,
+          systemInstruction,
+          model,
+          temperature,
+          maxOutputTokens,
+        });
+        return res.json({ success: true, text: generated });
+      }
 
-- Niche: ${niche}
-- Topic / Focus: ${topic || 'Trending high-velocity topics in this niche'}
+      case 'generateStructuredJSON': {
+        const data = await geminiService.generateStructuredJSON({
+          prompt: prompt || text,
+          systemInstruction,
+          model,
+          temperature,
+          responseSchema,
+        });
+        return res.json({ success: true, data });
+      }
+
+      case 'analyzeText': {
+        const analysis = await geminiService.analyzeText({
+          text: text || prompt,
+          instructions: instructions || instruction || 'Analyze this content in depth.',
+          model,
+        });
+        return res.json({ success: true, analysis });
+      }
+
+      case 'rewriteText': {
+        const rewritten = await geminiService.rewriteText({
+          text: text || prompt,
+          instruction: instruction || instructions || 'Polish and improve this text.',
+          tone,
+          model,
+        });
+        return res.json({ success: true, rewritten });
+      }
+
+      case 'summarizeText': {
+        const summary = await geminiService.summarizeText({
+          text: text || prompt,
+          maxLength,
+          model,
+        });
+        return res.json({ success: true, summary });
+      }
+
+      case 'generateIdeas': {
+        const ideas = await executeGenerateIdeas(req.body);
+        return res.json({ success: true, ideas });
+      }
+
+      default:
+        return res.status(400).json({
+          success: false,
+          error: `Unsupported AI operation: "${operation}". Supported operations: generateIdeas, generateText, generateStructuredJSON, analyzeText, rewriteText, summarizeText.`,
+          code: 'UNSUPPORTED_OPERATION',
+        });
+    }
+  } catch (err: any) {
+    const errorObj = geminiService.sanitizeError(err);
+    return res.status(errorObj.statusCode).json({
+      success: false,
+      error: errorObj.message,
+      code: errorObj.code,
+    });
+  }
+});
+
+/**
+ * Validates and normalizes raw idea objects from Gemini structured output.
+ * Throws explicit GeminiServiceError if any required field is missing or malformed.
+ */
+function validateAndNormalizeIdeas(raw: any, fallbackParams: any): any[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new GeminiServiceError(
+      'AI response did not return a valid list of content ideas.',
+      502,
+      'INVALID_RESPONSE_STRUCTURE'
+    );
+  }
+
+  return raw.map((item, idx) => {
+    if (typeof item !== 'object' || item === null) {
+      throw new GeminiServiceError(
+        `Idea #${idx + 1} is malformed. Expected an object.`,
+        502,
+        'MALFORMED_IDEA'
+      );
+    }
+
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    const hook = typeof item.hook === 'string' ? item.hook.trim() : '';
+    const coreConcept = typeof (item.coreConcept || item.concept) === 'string'
+      ? (item.coreConcept || item.concept).trim()
+      : '';
+    const uniqueAngle = typeof (item.uniqueAngle || item.angle) === 'string'
+      ? (item.uniqueAngle || item.angle).trim()
+      : '';
+
+    if (!title) {
+      throw new GeminiServiceError(
+        `Idea #${idx + 1} is missing a valid title.`,
+        502,
+        'MALFORMED_IDEA'
+      );
+    }
+    if (!hook) {
+      throw new GeminiServiceError(
+        `Idea #${idx + 1} is missing a valid opening hook.`,
+        502,
+        'MALFORMED_IDEA'
+      );
+    }
+    if (!coreConcept) {
+      throw new GeminiServiceError(
+        `Idea #${idx + 1} is missing a core concept breakdown.`,
+        502,
+        'MALFORMED_IDEA'
+      );
+    }
+
+    const clampScore = (val: any, defaultVal: number) => {
+      const num = Number(val);
+      if (isNaN(num) || num <= 0) return defaultVal;
+      return Math.min(100, Math.max(1, Math.round(num)));
+    };
+
+    const trendRelevance = clampScore(item.trendRelevance ?? item.trendScore, 85);
+    const audienceInterest = clampScore(item.audienceInterest ?? item.audienceInterestScore, 88);
+    const competition = clampScore(item.competition ?? item.competitionScore, 45);
+    const opportunityScore = clampScore(item.opportunityScore, 86);
+
+    const whyThisIdea = typeof (item.whyThisIdea || item.reason) === 'string'
+      ? (item.whyThisIdea || item.reason).trim()
+      : 'Targeted to current viewer psychographics and algorithmic search velocity.';
+
+    const keywords = Array.isArray(item.keywords)
+      ? item.keywords.map(String).filter((k: string) => k.trim().length > 0)
+      : [];
+
+    const hashtags = Array.isArray(item.hashtags)
+      ? item.hashtags.map((h: string) => {
+          const str = String(h).trim();
+          return str.startsWith('#') ? str : `#${str}`;
+        }).filter((h: string) => h.length > 1)
+      : [];
+
+    const thumbnailConcept = typeof item.thumbnailConcept === 'string'
+      ? item.thumbnailConcept.trim()
+      : '';
+
+    const cta = typeof item.cta === 'string'
+      ? item.cta.trim()
+      : 'Subscribe and share your perspective in the comments.';
+
+    return {
+      title,
+      coreConcept,
+      concept: coreConcept, // preserve dual compatibility
+      uniqueAngle: uniqueAngle || 'Distinct creator angle with clear practical differentiation.',
+      angle: uniqueAngle || 'Distinct creator angle with clear practical differentiation.',
+      hook,
+      targetAudience: typeof item.targetAudience === 'string' && item.targetAudience.trim()
+        ? item.targetAudience.trim()
+        : fallbackParams.targetAudience || 'Target audience',
+      recommendedPlatform: typeof item.recommendedPlatform === 'string' && item.recommendedPlatform.trim()
+        ? item.recommendedPlatform.trim()
+        : fallbackParams.platform || 'YouTube Long-form',
+      contentType: typeof item.contentType === 'string' && item.contentType.trim()
+        ? item.contentType.trim()
+        : fallbackParams.contentType || 'Educational',
+      estimatedDuration: typeof item.estimatedDuration === 'string' && item.estimatedDuration.trim()
+        ? item.estimatedDuration.trim()
+        : fallbackParams.videoDuration || '8-12 minutes',
+      whyThisIdea,
+      reason: whyThisIdea, // preserve dual compatibility
+      trendRelevance,
+      trendScore: trendRelevance,
+      audienceInterest,
+      audienceInterestScore: audienceInterest,
+      competition,
+      competitionScore: competition,
+      opportunityScore,
+      keywords,
+      hashtags,
+      thumbnailConcept,
+      cta,
+    };
+  });
+}
+
+/**
+ * Core Idea Generation Logic with Gemini structured output
+ */
+async function executeGenerateIdeas(params: any): Promise<any[]> {
+  const {
+    niche = 'General Tech & Productivity',
+    topic = '',
+    targetAudience = 'Creators and tech enthusiasts',
+    platform = 'YouTube Long-form',
+    contentType = 'Educational',
+    language = 'English',
+    tone = 'Energetic',
+    videoDuration = '8-12 minutes',
+    goal = 'High Views / Reach',
+    referenceContext = '',
+    currentTrendContext = '',
+    competitorReference = '',
+    keywords = [],
+    userNotes = '',
+    count = 4,
+  } = params;
+
+  const prompt = `You are MintMind AI, the premier AI Content Operating System ideation engine for elite creators.
+Generate ${count} distinct, high-performing, original, and deeply researched content ideas based on the following creator inputs:
+
+- Niche / Domain: ${niche}
+- Topic / Seed Keyword: ${topic ? `"${topic}"` : 'High-demand, trending opportunity in this niche'}
 - Target Audience: ${targetAudience}
 - Platform: ${platform}
 - Content Type: ${contentType}
 - Language: ${language}
-- Tone: ${tone}
-- Video Duration: ${videoDuration}
-- Goal: ${goal}
-${currentTrendContext ? `- Current Trend / Context: ${currentTrendContext}` : ''}
+- Tone / Persona: ${tone}
+- Video Duration / Runtime: ${videoDuration}
+- Core Goal: ${goal}
+${currentTrendContext ? `- Current Trend / Market Context: ${currentTrendContext}` : ''}
 ${competitorReference ? `- Competitor / Reference Inspiration: ${competitorReference}` : ''}
 ${keywords && keywords.length ? `- Targeted Keywords: ${Array.isArray(keywords) ? keywords.join(', ') : keywords}` : ''}
-${userNotes ? `- User Notes: ${userNotes}` : ''}
+${userNotes ? `- User Directives & Constraints: ${userNotes}` : ''}
 ${referenceContext ? `- Reference Context: ${referenceContext}` : ''}
 
-You MUST return a strictly valid JSON array of idea objects. Do NOT include markdown code blocks or conversational text outside JSON.
+CRITICAL CREATIVE & STRATEGIC DIRECTIVES:
+1. Topic Alignment: Every single idea must strictly center on the specified topic and niche.
+2. Distinct Angles: Do not produce repetitive variations of the same premise. Provide completely distinct conceptual angles (e.g. counter-intuitive breakdown, actionable playbook, high-stakes case study, behind-the-scenes teardown).
+3. Practical Hooks: Provide word-for-word spoken opening hooks (first 3-5 seconds) designed to eliminate scroll inertia and build immediate curiosity gaps without cheap clickbait.
+4. Target Language & Tone: Adapt vocabulary and phrasing naturally to ${language} and ${tone}.
+5. Realistic Algorithmic Estimations: Provide realistic algorithmic index scores (integers 1-100) representing MintMind AI strategic estimates only. Never claim guaranteed virality or 100% certainty.
+
+You MUST return a strictly valid JSON array of ${count} idea objects. Do NOT include markdown code blocks or conversational text outside JSON.
 Each idea object must have exactly these keys:
 [
   {
-    "title": "Compelling, clickable, non-clickbait high-CTR title",
-    "hook": "Specific first 3-5 seconds verbal hook or opening statement to stop the scroll",
-    "concept": "Clear, detailed breakdown of what the video is actually about and the transformation it delivers",
-    "angle": "What makes this perspective unique compared to competitors",
+    "title": "Compelling, clickable, high-CTR non-clickbait title",
+    "coreConcept": "Clear, detailed breakdown of what the video covers, the key insights, and the transformation it delivers",
+    "uniqueAngle": "What makes this specific perspective or approach different and superior to existing content",
+    "hook": "Exact word-for-word first 3-5 seconds opening verbal hook that captures immediate attention",
     "targetAudience": "${targetAudience}",
-    "contentType": "${contentType}",
     "recommendedPlatform": "${platform}",
+    "contentType": "${contentType}",
     "estimatedDuration": "${videoDuration}",
-    "trendScore": 85, // integer 0-100 based on current market velocity (MintMind AI estimates)
-    "audienceInterestScore": 90, // integer 0-100
-    "competitionScore": 45, // integer 0-100 (lower means easier to stand out)
-    "opportunityScore": 88, // integer 0-100 (computed algorithmic opportunity)
-    "reason": "Strategic explanation of why this idea works right now based on viewer psychology",
+    "whyThisIdea": "Behavioral psychology rationale for why viewers will click, stay engaged, and value this video",
+    "trendRelevance": 86,
+    "audienceInterest": 91,
+    "competition": 42,
+    "opportunityScore": 89,
     "keywords": ["keyword1", "keyword2", "keyword3", "keyword4"],
     "hashtags": ["#tag1", "#tag2", "#tag3"],
-    "thumbnailConcept": "Specific visual description: focal element, facial expression, background lighting, and max 3-4 word punchy text overlay",
-    "cta": "Engaging call-to-action tuned to the specified goal (${goal})"
+    "thumbnailConcept": "Visual art direction: subject composition, emotional facial expression, background lighting, and max 3-4 word high-contrast text overlay",
+    "cta": "Punchy, audience-aligned call-to-action tailored to the goal: ${goal}"
   }
 ]`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
+  const rawIdeas = await geminiService.generateStructuredJSON<any[]>({
+    prompt,
+    model: 'gemini-3.5-flash-lite',
+  });
 
-    const responseText = response.text || '[]';
-    const ideas = extractJson<any[]>(responseText, []);
+  return validateAndNormalizeIdeas(rawIdeas, {
+    targetAudience,
+    platform,
+    contentType,
+    videoDuration,
+  });
+}
 
+// 1. Generate Ideas
+aiRouter.post('/generate-ideas', async (req: Request, res: Response) => {
+  try {
+    const ideas = await executeGenerateIdeas(req.body);
     res.json({ success: true, ideas });
   } catch (err: any) {
-    console.error('Error in /generate-ideas:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to generate ideas with AI.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -157,10 +352,8 @@ aiRouter.post('/analyze-idea', async (req: Request, res: Response) => {
   try {
     const { idea } = req.body;
     if (!idea) {
-      return res.status(400).json({ success: false, error: 'Idea object is required' });
+      return res.status(400).json({ success: false, error: 'Idea object is required', code: 'BAD_REQUEST' });
     }
-
-    const ai = getGenAI();
 
     const prompt = `You are MintMind AI's Executive Content Strategist.
 Perform an in-depth audit of the following content idea:
@@ -197,21 +390,18 @@ Return a strictly valid JSON object with the following analysis:
   "contentGapOpportunity": "Clear opportunity gap in current competitor uploads this idea fills"
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const analysis = await geminiService.generateStructuredJSON<any>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const analysis = extractJson<any>(response.text || '{}', {});
     res.json({ success: true, analysis });
   } catch (err: any) {
-    console.error('Error in /analyze-idea:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to analyze idea.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -221,10 +411,8 @@ aiRouter.post('/generate-variations', async (req: Request, res: Response) => {
   try {
     const { idea } = req.body;
     if (!idea) {
-      return res.status(400).json({ success: false, error: 'Idea is required' });
+      return res.status(400).json({ success: false, error: 'Idea is required', code: 'BAD_REQUEST' });
     }
-
-    const ai = getGenAI();
 
     const prompt = `You are MintMind AI Idea Multiplier.
 Take this base idea:
@@ -279,21 +467,18 @@ Return a strictly valid JSON array of 5 objects:
   }
 ]`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const variations = await geminiService.generateStructuredJSON<any[]>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const variations = extractJson<any[]>(response.text || '[]', []);
     res.json({ success: true, variations });
   } catch (err: any) {
-    console.error('Error in /generate-variations:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to generate variations.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -302,7 +487,9 @@ Return a strictly valid JSON array of 5 objects:
 aiRouter.post('/improve-idea', async (req: Request, res: Response) => {
   try {
     const { idea } = req.body;
-    const ai = getGenAI();
+    if (!idea) {
+      return res.status(400).json({ success: false, error: 'Idea is required', code: 'BAD_REQUEST' });
+    }
 
     const prompt = `Improve and sharpen this content idea to maximize viewer retention, click-through-rate, and algorithmic reach:
 Title: ${idea.title}
@@ -319,21 +506,18 @@ Return a strictly valid JSON object:
   "reason": "Why these specific changes will increase viewer watch-time"
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const improved = await geminiService.generateStructuredJSON<any>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const improved = extractJson<any>(response.text || '{}', {});
     res.json({ success: true, improved });
   } catch (err: any) {
-    console.error('Error in /improve-idea:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to improve idea.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -359,8 +543,6 @@ aiRouter.post('/generate-script', async (req: Request, res: Response) => {
     const isShortForm =
       platform.includes('Short') || platform.includes('Reel') || platform.includes('Story');
 
-    const ai = getGenAI();
-
     const prompt = `You are MintMind AI, the master scriptwriter for top creators.
 Generate a complete, production-ready script and scene-by-scene breakdown for:
 
@@ -368,97 +550,102 @@ Topic: ${topic}
 ${ideaText ? `Source Idea / Concept: ${ideaText}` : ''}
 Target Audience: ${audience}
 Platform: ${platform}
+Format: ${isShortForm ? 'Short-form Vertical Video' : 'Long-form Horizontal Video'}
+Duration: ${duration}
 Language: ${language}
-Tone: ${tone}
-Target Duration: ${duration}
+Tone / Delivery Style: ${tone}
 Narration Style: ${narrationStyle}
-CTA Style: ${ctaStyle}
-${brandVoice ? `Brand Voice Guidelines: ${brandVoice}` : ''}
-${keyPoints?.length ? `Must-include Key Points: ${keyPoints.join(', ')}` : ''}
-${referenceMaterial ? `Reference Context: ${referenceMaterial}` : ''}
+Call-to-Action: ${ctaStyle}
+${brandVoice ? `Creator Voice: ${brandVoice}` : ''}
+${keyPoints && keyPoints.length ? `Mandatory Core Points: ${keyPoints.join(', ')}` : ''}
+${referenceMaterial ? `Reference Notes: ${referenceMaterial}` : ''}
 
-CRITICAL STRUCTURAL REQUIREMENTS:
-${
-  isShortForm
-    ? `For short-form (${platform}), structure sections as:
-1. 0-3s HOOK (High energy pattern interrupt)
-2. SETUP (Problem or premise in 5 seconds)
-3. MAIN CONTENT (Fast value delivery, punchy bullets)
-4. PATTERN INTERRUPT (Visual shift or unexpected twist at 20-30s)
-5. PAYOFF (Big result or resolution)
-6. CTA (Instant action command)`
-    : `For long-form (${platform}), structure sections as:
-1. HOOK (0:00 - 0:30 Opening promise and preview of payoff)
-2. INTRO (0:30 - 1:15 Establish stakes and roadmap)
-3. SECTION 1: Core Framework / Foundation
-4. SECTION 2: Deep Dive / Step-by-Step Breakdown
-5. SECTION 3: Advanced Secrets / Counter-intuitive Insights
-6. EXAMPLES / CASE STUDY: Real world proof
-7. TRANSITIONS & PATTERN INTERRUPTS: Keeping pacing brisk
-8. CTA: Strategic call to action
-9. OUTRO & CLIFFHANGER: Retention wrap-up`
-}
-
-Also generate between ${isShortForm ? '4 and 6' : '6 and 10'} detailed SCENE-BY-SCENE breakdowns corresponding to the script!
-Each scene must specify:
-- sceneNumber: 1, 2, ...
-- duration: e.g. "0–04 sec"
-- voiceover: exact spoken words for this scene
-- visualDescription: detailed art direction prompt describing what is seen on screen
-- bRollSuggestion: b-roll shot idea (e.g. macro lens typing, fast screencast, cinemagraph)
-- onScreenText: punchy kinetic typography text
-- cameraDirection: e.g. "Slow push in on host", "Wide aerial establishing shot", "Dynamic Dutch angle zoom"
-- transition: e.g. "Whip pan right", "Hard cut with whoosh SFX", "Glitch dissolve"
-- sfxMusic: e.g. "Deep sub-bass impact risers", "Upbeat tech lo-fi synth groove", "Suspenseful string swell"
-
-Return a strictly valid JSON object matching this schema:
+You MUST return a strictly valid JSON object matching this structure:
 {
-  "title": "Captivating Script Title",
+  "title": "${topic}",
   "type": "${platform}",
   "sections": [
     {
-      "id": "sec-1",
-      "name": "HOOK",
-      "content": "Exact script voiceover lines and narration...",
+      "id": "sec_1",
+      "name": "THE HOOK",
+      "content": "Exact word-for-word spoken script text for this section...",
+      "narration": "Exact word-for-word spoken script text...",
+      "targetDuration": "0:00 - 0:15",
+      "wordCount": 45,
+      "visualDescription": "Camera framing, b-roll, motion graphics instruction",
+      "directorNotes": "Energy spike, fast cut, no pauses",
+      "pacing": "fast",
       "order": 1
     }
   ],
   "scenes": [
     {
       "sceneNumber": 1,
-      "duration": "0–05 sec",
-      "voiceover": "Spoken text...",
-      "visualDescription": "Detailed visual layout...",
-      "bRollSuggestion": "B-roll...",
-      "onScreenText": "TEXT",
-      "cameraDirection": "Camera move...",
-      "transition": "Cut...",
-      "sfxMusic": "SFX..."
+      "duration": "5s",
+      "durationSec": 5,
+      "voiceover": "Opening hook dialogue line spoken in this scene...",
+      "spokenDialogue": "Opening hook dialogue line spoken in this scene...",
+      "visualDescription": "Host standing with neon rim light looking directly into lens",
+      "cameraDirection": "Medium Close Up, Eye Level",
+      "shotType": "Medium Close Up",
+      "action": "Host gestures forward with intense focus",
+      "onScreenText": "3 PUNCHY WORDS",
+      "bRollSuggestion": "Quick montage of charts crashing",
+      "sfxMusic": "Subtle bass drop into driving synth beat",
+      "sfx": "Subtle bass drop into driving synth beat",
+      "transition": "Cut",
+      "lightingMood": "High-contrast cinematic cyan & dark slate"
     }
   ]
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const script = await geminiService.generateStructuredJSON<any>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const result = extractJson<any>(response.text || '{}', {
-      title: topic,
-      type: platform,
-      sections: [],
-      scenes: [],
-    });
+    if (script && Array.isArray(script.sections)) {
+      script.sections = script.sections.map((sec: any, idx: number) => ({
+        id: sec.id || `sec_${idx + 1}`,
+        name: sec.name || `Section ${idx + 1}`,
+        content: sec.content || sec.narration || '',
+        order: typeof sec.order === 'number' ? sec.order : idx + 1,
+        ...sec,
+      }));
+    }
 
-    res.json({ success: true, script: result });
+    if (script && Array.isArray(script.scenes)) {
+      script.scenes = script.scenes.map((sc: any, idx: number) => {
+        const durSec = typeof sc.durationSec === 'number'
+          ? sc.durationSec
+          : typeof sc.duration === 'number'
+            ? sc.duration
+            : parseInt(String(sc.duration || '5'), 10) || 5;
+
+        return {
+          sceneNumber: typeof sc.sceneNumber === 'number' ? sc.sceneNumber : idx + 1,
+          duration: `${durSec}s`,
+          durationSec: durSec,
+          voiceover: sc.voiceover || sc.spokenDialogue || '',
+          visualDescription: sc.visualDescription || sc.action || '',
+          bRollSuggestion: sc.bRollSuggestion || '',
+          onScreenText: sc.onScreenText || '',
+          cameraDirection: sc.cameraDirection || sc.shotType || 'Medium Shot',
+          transition: sc.transition || 'Cut',
+          sfxMusic: sc.sfxMusic || sc.sfx || '',
+          sfx: sc.sfx || sc.sfxMusic || '',
+          ...sc,
+        };
+      });
+    }
+
+    res.json({ success: true, script });
   } catch (err: any) {
-    console.error('Error in /generate-script:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to generate script.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -475,10 +662,8 @@ aiRouter.post('/rewrite-section', async (req: Request, res: Response) => {
     } = req.body;
 
     if (!currentContent) {
-      return res.status(400).json({ success: false, error: 'Current section content is required' });
+      return res.status(400).json({ success: false, error: 'Current section content is required', code: 'BAD_REQUEST' });
     }
-
-    const ai = getGenAI();
 
     let instruction = '';
     switch (action) {
@@ -545,25 +730,18 @@ Return a strictly valid JSON object:
   "explanation": "Brief 1-sentence note of what was changed and why it enhances the script"
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
-
-    const parsed = extractJson<any>(response.text || '{}', {
-      modifiedContent: currentContent,
-      explanation: 'Content updated.',
+    const parsed = await geminiService.generateStructuredJSON<any>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, ...parsed });
   } catch (err: any) {
-    console.error('Error in /rewrite-section:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to rewrite section.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -572,7 +750,6 @@ Return a strictly valid JSON object:
 aiRouter.post('/generate-seo', async (req: Request, res: Response) => {
   try {
     const { scriptText = '', topic = '', platform = 'YouTube', audience = '' } = req.body;
-    const ai = getGenAI();
 
     const prompt = `You are MintMind AI's YouTube & Social SEO Algorithm Master.
 Analyze this script and topic to engineer the maximum search ranking and recommendation boost:
@@ -607,21 +784,18 @@ Return a strictly valid JSON object with:
   }
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const seo = await geminiService.generateStructuredJSON<any>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const seo = extractJson<any>(response.text || '{}', {});
     res.json({ success: true, seo });
   } catch (err: any) {
-    console.error('Error in /generate-seo:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to generate SEO.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -630,7 +804,6 @@ Return a strictly valid JSON object with:
 aiRouter.post('/generate-thumbnails', async (req: Request, res: Response) => {
   try {
     const { title = '', concept = '', platform = 'YouTube' } = req.body;
-    const ai = getGenAI();
 
     const prompt = `You are MintMind AI's Elite Thumbnail Art Director.
 Design 3 distinctly different, high-CTR thumbnail packaging concepts for:
@@ -653,21 +826,18 @@ Return a strictly valid JSON array of 3 concepts:
   }
 ]`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const thumbnails = await geminiService.generateStructuredJSON<any[]>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const thumbnails = extractJson<any[]>(response.text || '[]', []);
     res.json({ success: true, thumbnails });
   } catch (err: any) {
-    console.error('Error in /generate-thumbnails:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to generate thumbnail concepts.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
@@ -676,7 +846,6 @@ Return a strictly valid JSON array of 3 concepts:
 aiRouter.post('/repurpose', async (req: Request, res: Response) => {
   try {
     const { scriptText = '', title = '', topic = '' } = req.body;
-    const ai = getGenAI();
 
     const prompt = `You are MintMind AI Multi-Platform Repurposing Engine.
 Repurpose this long-form script or topic into 3 standalone, optimized short-form assets:
@@ -723,30 +892,26 @@ Return a strictly valid JSON object with this exact shape:
   }
 }`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const repurpose = await geminiService.generateStructuredJSON<any>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const repurpose = extractJson<any>(response.text || '{}', {});
     res.json({ success: true, repurpose });
   } catch (err: any) {
-    console.error('Error in /repurpose:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to repurpose script.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
 
-// 10. Complete Content Package (One-click execution from Idea)
+// 10. Complete Content Package
 aiRouter.post('/generate-content-package', async (req: Request, res: Response) => {
   try {
     const { idea, topic = '', platform = 'YouTube Long-form', language = 'English', audience = 'Creators' } = req.body;
-    const ai = getGenAI();
 
     const prompt = `You are MintMind AI Content Operating System.
 Generate a COMPLETE, comprehensive end-to-end content production package from this idea:
@@ -768,43 +933,38 @@ You must return a single, unified, strictly valid JSON object containing:
 
 Strict JSON format only.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const contentPackage = await geminiService.generateStructuredJSON<any>({
+      prompt,
+      model: 'gemini-3.5-flash-lite',
     });
 
-    const contentPackage = extractJson<any>(response.text || '{}', {});
     res.json({ success: true, contentPackage });
   } catch (err: any) {
-    console.error('Error in /generate-content-package:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to generate complete content package.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });
 
-// 11. Scene Image Generation (Attempts Gemini image model or creates verified scene card)
+// 11. Scene Image Generation (Preserved for existing storyboard cards)
 aiRouter.post('/generate-scene-image', async (req: Request, res: Response) => {
   try {
     const { prompt: imagePrompt = '', sceneNumber = 1, style = 'Cinematic Photo' } = req.body;
 
-    // Check if GEMINI_API_KEY is configured
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(400).json({
+    if (!geminiService.isConfigured()) {
+      return res.status(503).json({
         success: false,
-        error: 'GEMINI_API_KEY is not configured on the server.',
+        error: 'AI provider not configured',
+        code: 'NOT_CONFIGURED',
       });
     }
 
-    const ai = getGenAI();
-
     try {
-      // Attempt image generation with gemini-3.1-flash-lite-image if available
-      const imgResponse = await (ai.models as any).generateImages({
+      const ai = geminiService.getClient();
+      const imgResponse = await (ai.models as any).generateImages?.({
         model: 'gemini-3.1-flash-lite-image',
         prompt: `${imagePrompt}. Style: ${style}. High resolution, 16:9 widescreen composition, cinematic lighting, ultra-detailed render.`,
         config: {
@@ -823,11 +983,10 @@ aiRouter.post('/generate-scene-image', async (req: Request, res: Response) => {
           model: 'gemini-3.1-flash-lite-image',
         });
       }
-    } catch (genImgError: any) {
-      console.warn('Direct gemini image model not enabled or rate-limited, creating high-res storyboard asset:', genImgError.message);
+    } catch {
+      // Direct image model may not be available; proceed to storyboard graphic
     }
 
-    // High quality programmatic storyboard asset with prompt overlay
     const escapedPrompt = imagePrompt.slice(0, 100).replace(/"/g, '&quot;');
     const svg = `
       <svg width="640" height="360" viewBox="0 0 640 360" xmlns="http://www.w3.org/2000/svg">
@@ -837,28 +996,16 @@ aiRouter.post('/generate-scene-image', async (req: Request, res: Response) => {
             <stop offset="50%" stop-color="#0f172a" />
             <stop offset="100%" stop-color="#1e1b4b" />
           </linearGradient>
-          <linearGradient id="cyan-glow" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="#06b6d4" />
-            <stop offset="100%" stop-color="#6366f1" />
-          </linearGradient>
         </defs>
         <rect width="640" height="360" fill="url(#bg)" />
         <circle cx="320" cy="180" r="140" fill="#06b6d4" opacity="0.08" />
         <rect x="24" y="24" width="592" height="312" rx="12" fill="none" stroke="#334155" stroke-width="1.5" stroke-dasharray="6 6" />
-        
-        <!-- Framing Crosshairs -->
         <line x1="310" y1="180" x2="330" y2="180" stroke="#06b6d4" stroke-width="2" />
         <line x1="320" y1="170" x2="320" y2="190" stroke="#06b6d4" stroke-width="2" />
-        
-        <!-- Badge -->
         <rect x="40" y="40" width="120" height="26" rx="6" fill="#06b6d4" opacity="0.2" />
         <text x="50" y="57" font-family="monospace" font-size="11" font-weight="bold" fill="#38bdf8">SCENE ${sceneNumber} • 16:9</text>
-        
-        <!-- Style Badge -->
         <rect x="480" y="40" width="120" height="26" rx="6" fill="#6366f1" opacity="0.2" />
         <text x="490" y="57" font-family="sans-serif" font-size="11" fill="#a5b4fc">${style}</text>
-
-        <!-- Prompt Text -->
         <text x="320" y="150" font-family="sans-serif" font-size="13" font-weight="bold" fill="#f8fafc" text-anchor="middle">SCENE VISUAL COMPOSITION</text>
         <text x="320" y="190" font-family="sans-serif" font-size="11" fill="#94a3b8" text-anchor="middle">
           "${escapedPrompt}..."
@@ -876,10 +1023,11 @@ aiRouter.post('/generate-scene-image', async (req: Request, res: Response) => {
       note: 'Storyboard frame synthesized. Ready for direct export or production pipeline.',
     });
   } catch (err: any) {
-    console.error('Error in /generate-scene-image:', err);
-    res.status(500).json({
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
       success: false,
-      error: err.message || 'Failed to generate scene image.',
+      error: errorObj.message,
+      code: errorObj.code,
     });
   }
 });

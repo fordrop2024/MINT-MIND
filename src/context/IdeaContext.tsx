@@ -115,7 +115,13 @@ export function IdeaProvider({ children }: { children: React.ReactNode }) {
             (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
           );
 
-          setIdeas(fetched);
+          setIdeas((prev) => {
+            // Retain any in-memory draft ideas generated in current session that haven't been saved yet
+            const unsavedDrafts = prev.filter(
+              (p) => p.status === 'draft' && !fetched.some((f) => f.id === p.id)
+            );
+            return [...unsavedDrafts, ...fetched];
+          });
           setLoading(false);
         },
         (err) => {
