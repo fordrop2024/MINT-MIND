@@ -1,3 +1,5 @@
+import type { StoryMode } from './storyMode';
+
 export type IdeaStatus = 'draft' | 'saved' | 'scripted' | 'produced' | 'published';
 
 export type PlatformOption =
@@ -81,6 +83,10 @@ export interface IdeaGenerationInputs {
   referenceContext?: string;
   projectId?: string;
   count?: number;
+  primaryMode?: StoryMode;
+  secondaryModes?: StoryMode[];
+  modeDetectionConfidence?: number;
+  modeReasoning?: string;
 }
 
 export interface Idea {
@@ -111,6 +117,10 @@ export interface Idea {
   thumbnailConcept: string;
   cta: string;
   status: IdeaStatus;
+  primaryMode?: StoryMode;
+  secondaryModes?: StoryMode[];
+  modeDetectionConfidence?: number;
+  modeReasoning?: string;
   metadata?: {
     niche?: string;
     topic?: string;

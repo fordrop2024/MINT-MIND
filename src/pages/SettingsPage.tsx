@@ -21,6 +21,10 @@ import {
   HardDrive,
   UploadCloud,
   CheckCircle2,
+  Cpu,
+  Zap,
+  Radio,
+  Sparkles,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -30,6 +34,12 @@ import { useRouter } from '../context/RouterContext';
 import { db, isFirebaseConfigured } from '../firebase/config';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import type { ThemeMode, SystemStatusResponse } from '../types';
+import type { AIProviderStatus, AIProviderId, ProviderTestResult } from '../types/aiProvider';
+import {
+  getAIProvidersAPI,
+  selectAIProviderAPI,
+  testAIProviderAPI,
+} from '../services/aiService';
 
 export function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -64,6 +74,14 @@ export function SettingsPage() {
   const [serverStatus, setServerStatus] = useState<SystemStatusResponse | null>(null);
   const [serverPingLoading, setServerPingLoading] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+
+  // AI Providers State
+  const [aiProviders, setAiProviders] = useState<AIProviderStatus[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState<AIProviderId>('gemini');
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ id: string; success: boolean; latencyMs?: number; message?: string } | null>(null);
+  const [switchingProviderId, setSwitchingProviderId] = useState<string | null>(null);
 
   // Sync settings from Firestore if authenticated
   useEffect(() => {
@@ -147,8 +165,61 @@ export function SettingsPage() {
     }
   };
 
+  const fetchAIProviders = async () => {
+    setProvidersLoading(true);
+    try {
+      const res = await getAIProvidersAPI();
+      setAiProviders(res.providers);
+      setActiveProviderId(res.activeProviderId);
+    } catch (err) {
+      console.warn('Could not load AI providers:', err);
+    } finally {
+      setProvidersLoading(false);
+    }
+  };
+
+  const handleSelectProvider = async (id: AIProviderId) => {
+    setSwitchingProviderId(id);
+    setTestResult(null);
+    try {
+      await selectAIProviderAPI(id);
+      setActiveProviderId(id);
+      await fetchAIProviders();
+      setSettingsFeedback(`Active AI provider set to ${id.toUpperCase()}`);
+      setTimeout(() => setSettingsFeedback(null), 3000);
+    } catch (err: any) {
+      setSettingsFeedback(`Failed to switch provider: ${err?.message || 'Error'}`);
+    } finally {
+      setSwitchingProviderId(null);
+    }
+  };
+
+  const handleTestProvider = async (id: AIProviderId) => {
+    setTestingProviderId(id);
+    setTestResult(null);
+    try {
+      const res = await testAIProviderAPI(id);
+      const isOk = res.ok ?? (res.success ?? true);
+      setTestResult({
+        id,
+        success: isOk,
+        latencyMs: res.latencyMs,
+        message: res.message || (isOk ? `Connected successfully (${res.latencyMs}ms)` : 'Connection test failed'),
+      });
+    } catch (err: any) {
+      setTestResult({
+        id,
+        success: false,
+        message: err?.message || 'Test connection error',
+      });
+    } finally {
+      setTestingProviderId(null);
+    }
+  };
+
   useEffect(() => {
     fetchServerStatus();
+    fetchAIProviders();
   }, []);
 
   const themeOptions: {
@@ -480,36 +551,172 @@ export function SettingsPage() {
         </div>
       </section>
 
-      {/* Section 5: Connected Services & APIs (STRICTLY DISCONNECTED IN PHASE 1) */}
-      <section id="settings-section-services" className="p-6 rounded-3xl glass-panel border border-slate-800/80 space-y-4">
+      {/* Section 5: AI Provider Architecture & Intelligence Engine */}
+      <section id="settings-section-ai-providers" className="p-6 rounded-3xl glass-panel border border-slate-800/80 space-y-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <Link2 className="w-4 h-4 text-cyan-400" />
+            <Cpu className="w-4 h-4 text-cyan-400" />
             <h2 className="text-sm font-bold text-slate-100 font-display">
-              Connected Services & APIs
+              AI Provider Architecture & Intelligence Engine
             </h2>
           </div>
-          <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
-            Phase 1 Foundation
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchAIProviders}
+              disabled={providersLoading}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3 h-3 ${providersLoading ? 'animate-spin text-cyan-400' : ''}`} />
+              <span>Refresh Providers</span>
+            </button>
+            <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+              Active: {activeProviderId.toUpperCase()}
+            </span>
+          </div>
         </div>
+
         <p className="text-xs text-slate-400">
-          All external media and AI generation APIs remain strictly disconnected in accordance with incremental development rules.
+          MintMind AI uses a modular provider registry supporting cloud foundation models, local offline daemons (Ollama), and OpenAI-compatible gateways. Select an active provider to power all creative pipeline steps.
         </p>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-          <div className="p-3 rounded-xl bg-slate-900/40 border border-slate-800/80">
-            <div className="text-xs font-bold text-slate-300">YouTube Data API</div>
-            <div className="text-[10px] font-mono text-slate-500 mt-1">Not connected yet</div>
+        {testResult && (
+          <div
+            className={`p-3 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+              testResult.success
+                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {testResult.success ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              )}
+              <span>{testResult.message}</span>
+            </div>
+            {typeof testResult.latencyMs === 'number' && (
+              <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-slate-900/60 border border-slate-700">
+                {testResult.latencyMs}ms latency
+              </span>
+            )}
           </div>
-          <div className="p-3 rounded-xl bg-slate-900/40 border border-slate-800/80">
-            <div className="text-xs font-bold text-slate-300">AI Video Generation</div>
-            <div className="text-[10px] font-mono text-slate-500 mt-1">Not connected yet</div>
-          </div>
-          <div className="p-3 rounded-xl bg-slate-900/40 border border-slate-800/80">
-            <div className="text-xs font-bold text-slate-300">Third-Party AI Models</div>
-            <div className="text-[10px] font-mono text-slate-500 mt-1">Not connected yet</div>
-          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {(aiProviders.length > 0 ? aiProviders : [
+            {
+              id: 'gemini' as AIProviderId,
+              name: 'Google Gemini',
+              type: 'cloud' as const,
+              configured: true,
+              health: 'connected' as const,
+              model: 'gemini-3.5-flash-lite',
+              availableModels: ['gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+            },
+            {
+              id: 'ollama' as AIProviderId,
+              name: 'Ollama (Local Host)',
+              type: 'local' as const,
+              configured: false,
+              health: 'standby' as const,
+              model: 'deepseek-r1:latest',
+              availableModels: ['deepseek-r1:latest', 'llama3.2:latest', 'mistral:latest'],
+              message: 'Local daemon at http://localhost:11434',
+            },
+            {
+              id: 'openai-compatible' as AIProviderId,
+              name: 'OpenAI-Compatible Gateway',
+              type: 'cloud' as const,
+              configured: false,
+              health: 'standby' as const,
+              model: 'gpt-4o-mini',
+              availableModels: ['gpt-4o-mini', 'gpt-4o', 'custom'],
+              message: 'Self-hosted or third-party endpoint',
+            },
+          ]).map((prov) => {
+            const isActive = activeProviderId === prov.id;
+            const isTesting = testingProviderId === prov.id;
+            const isSwitching = switchingProviderId === prov.id;
+
+            return (
+              <div
+                key={prov.id}
+                className={`p-4 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
+                  isActive
+                    ? 'bg-cyan-950/20 border-cyan-500/50 shadow-lg shadow-cyan-950/30'
+                    : 'bg-slate-900/50 border-slate-800/80 hover:border-slate-700'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                      {prov.type.toUpperCase()}
+                    </span>
+                    <span
+                      className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded border flex items-center gap-1 ${
+                        prov.health === 'connected'
+                          ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                          : prov.health === 'error'
+                          ? 'bg-rose-500/10 text-rose-300 border-rose-500/30'
+                          : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          prov.health === 'connected'
+                            ? 'bg-emerald-400'
+                            : prov.health === 'error'
+                            ? 'bg-rose-400'
+                            : 'bg-amber-400'
+                        }`}
+                      />
+                      {prov.health}
+                    </span>
+                  </div>
+
+                  <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                    {prov.name}
+                    {isActive && <Check className="w-4 h-4 text-cyan-400" />}
+                  </h3>
+
+                  <p className="text-[11px] font-mono text-slate-400 mt-1">
+                    Model: <span className="text-cyan-300">{prov.model}</span>
+                  </p>
+
+                  {prov.message && (
+                    <p className="text-[10px] text-slate-500 mt-1 line-clamp-2">
+                      {prov.message}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-800/60">
+                  <button
+                    onClick={() => handleSelectProvider(prov.id)}
+                    disabled={isActive || isSwitching}
+                    className={`flex-1 py-1.5 px-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 cursor-default'
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                    } disabled:opacity-60`}
+                  >
+                    {isSwitching ? 'Activating...' : isActive ? 'Active' : 'Set as Active'}
+                  </button>
+
+                  <button
+                    onClick={() => handleTestProvider(prov.id)}
+                    disabled={isTesting}
+                    title="Test connection and latency"
+                    className="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-1 border border-slate-700 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <Zap className={`w-3 h-3 ${isTesting ? 'animate-spin text-amber-400' : 'text-amber-400'}`} />
+                    <span>{isTesting ? 'Testing...' : 'Ping'}</span>
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
 

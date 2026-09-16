@@ -1,19 +1,72 @@
 import { Router, Request, Response } from 'express';
 import { geminiService, GeminiServiceError } from './services/geminiService.js';
+import { aiProviderRegistry } from './services/aiProviderRegistry.js';
 
 export const aiRouter = Router();
 
 /**
- * AI Provider Status
+ * AI Provider Status & Capabilities
  * GET /api/ai/status
  */
 aiRouter.get('/status', (_req: Request, res: Response) => {
-  const status = geminiService.getStatus();
+  const active = aiProviderRegistry.getActiveProvider();
+  const status = active.getStatus();
   res.json({
     configured: status.configured,
     textModel: status.model,
-    provider: status.provider,
+    provider: status.name,
+    providerId: status.id,
+    type: status.type,
+    health: status.health,
+    message: status.message,
+    availableModels: status.availableModels,
   });
+});
+
+/**
+ * List All Available AI Providers
+ * GET /api/ai/providers
+ */
+aiRouter.get('/providers', (_req: Request, res: Response) => {
+  const providers = aiProviderRegistry.getAllProvidersStatus();
+  const activeProviderId = aiProviderRegistry.getActiveProviderId();
+  res.json({
+    success: true,
+    activeProviderId,
+    providers,
+  });
+});
+
+/**
+ * Select Active AI Provider
+ * POST /api/ai/providers/select
+ */
+aiRouter.post('/providers/select', (req: Request, res: Response) => {
+  try {
+    const { providerId, config } = req.body;
+    if (!providerId) {
+      return res.status(400).json({ success: false, error: 'providerId is required' });
+    }
+    const status = aiProviderRegistry.selectProvider(providerId, config);
+    res.json({ success: true, status });
+  } catch (err: any) {
+    res.status(400).json({ success: false, error: err?.message || 'Failed to select provider' });
+  }
+});
+
+/**
+ * Test Connection to an AI Provider
+ * POST /api/ai/providers/test
+ */
+aiRouter.post('/providers/test', async (req: Request, res: Response) => {
+  try {
+    const { providerId, config } = req.body;
+    const targetId = providerId || aiProviderRegistry.getActiveProviderId();
+    const result = await aiProviderRegistry.testProvider(targetId, config);
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || 'Provider test failed' });
+  }
 });
 
 /**
@@ -28,6 +81,7 @@ aiRouter.get('/status', (_req: Request, res: Response) => {
  * - summarizeText
  */
 aiRouter.post('/', async (req: Request, res: Response) => {
+  const ai = aiProviderRegistry.getActiveProvider();
   try {
     const {
       operation,
@@ -54,7 +108,7 @@ aiRouter.post('/', async (req: Request, res: Response) => {
 
     switch (operation) {
       case 'generateText': {
-        const generated = await geminiService.generateText({
+        const generated = await ai.generateText({
           prompt: prompt || text,
           systemInstruction,
           model,
@@ -65,7 +119,7 @@ aiRouter.post('/', async (req: Request, res: Response) => {
       }
 
       case 'generateStructuredJSON': {
-        const data = await geminiService.generateStructuredJSON({
+        const data = await ai.generateStructuredJSON({
           prompt: prompt || text,
           systemInstruction,
           model,
@@ -76,7 +130,7 @@ aiRouter.post('/', async (req: Request, res: Response) => {
       }
 
       case 'analyzeText': {
-        const analysis = await geminiService.analyzeText({
+        const analysis = await ai.analyzeText({
           text: text || prompt,
           instructions: instructions || instruction || 'Analyze this content in depth.',
           model,
@@ -85,7 +139,7 @@ aiRouter.post('/', async (req: Request, res: Response) => {
       }
 
       case 'rewriteText': {
-        const rewritten = await geminiService.rewriteText({
+        const rewritten = await ai.rewriteText({
           text: text || prompt,
           instruction: instruction || instructions || 'Polish and improve this text.',
           tone,
@@ -95,7 +149,7 @@ aiRouter.post('/', async (req: Request, res: Response) => {
       }
 
       case 'summarizeText': {
-        const summary = await geminiService.summarizeText({
+        const summary = await ai.summarizeText({
           text: text || prompt,
           maxLength,
           model,
@@ -116,8 +170,8 @@ aiRouter.post('/', async (req: Request, res: Response) => {
         });
     }
   } catch (err: any) {
-    const errorObj = geminiService.sanitizeError(err);
-    return res.status(errorObj.statusCode).json({
+    const errorObj = ai.sanitizeError(err);
+    return res.status(errorObj.statusCode || 500).json({
       success: false,
       error: errorObj.message,
       code: errorObj.code,
@@ -244,6 +298,12 @@ function validateAndNormalizeIdeas(raw: any, fallbackParams: any): any[] {
       hashtags,
       thumbnailConcept,
       cta,
+      primaryMode: item.primaryMode || fallbackParams.primaryMode || 'Documentary',
+      secondaryModes: Array.isArray(item.secondaryModes) && item.secondaryModes.length > 0
+        ? item.secondaryModes
+        : fallbackParams.secondaryModes || [],
+      modeDetectionConfidence: fallbackParams.modeDetectionConfidence || 85,
+      modeReasoning: fallbackParams.modeReasoning || '',
     };
   });
 }
@@ -268,6 +328,8 @@ async function executeGenerateIdeas(params: any): Promise<any[]> {
     keywords = [],
     userNotes = '',
     count = 4,
+    primaryMode,
+    secondaryModes = [],
   } = params;
 
   const prompt = `You are MintMind AI, the premier AI Content Operating System ideation engine for elite creators.
@@ -282,6 +344,7 @@ Generate ${count} distinct, high-performing, original, and deeply researched con
 - Tone / Persona: ${tone}
 - Video Duration / Runtime: ${videoDuration}
 - Core Goal: ${goal}
+${primaryMode ? `- Adaptive Story Mode: ${primaryMode} ${secondaryModes && secondaryModes.length ? `(Secondary influences: ${secondaryModes.join(', ')})` : ''}` : ''}
 ${currentTrendContext ? `- Current Trend / Market Context: ${currentTrendContext}` : ''}
 ${competitorReference ? `- Competitor / Reference Inspiration: ${competitorReference}` : ''}
 ${keywords && keywords.length ? `- Targeted Keywords: ${Array.isArray(keywords) ? keywords.join(', ') : keywords}` : ''}
@@ -319,9 +382,8 @@ Each idea object must have exactly these keys:
   }
 ]`;
 
-  const rawIdeas = await geminiService.generateStructuredJSON<any[]>({
+  const rawIdeas = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any[]>({
     prompt,
-    model: 'gemini-3.5-flash-lite',
   });
 
   return validateAndNormalizeIdeas(rawIdeas, {
@@ -390,9 +452,8 @@ Return a strictly valid JSON object with the following analysis:
   "contentGapOpportunity": "Clear opportunity gap in current competitor uploads this idea fills"
 }`;
 
-    const analysis = await geminiService.generateStructuredJSON<any>({
+    const analysis = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, analysis });
@@ -467,9 +528,8 @@ Return a strictly valid JSON array of 5 objects:
   }
 ]`;
 
-    const variations = await geminiService.generateStructuredJSON<any[]>({
+    const variations = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any[]>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, variations });
@@ -506,9 +566,8 @@ Return a strictly valid JSON object:
   "reason": "Why these specific changes will increase viewer watch-time"
 }`;
 
-    const improved = await geminiService.generateStructuredJSON<any>({
+    const improved = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, improved });
@@ -518,6 +577,163 @@ Return a strictly valid JSON object:
       success: false,
       error: errorObj.message,
       code: errorObj.code,
+    });
+  }
+});
+
+// 4.5 Detect Story Mode
+const VALID_STORY_MODES = [
+  'Documentary',
+  'Action',
+  'Crime',
+  'Thriller',
+  'Horror',
+  'Sci-Fi',
+  'Space',
+  'Mystery',
+  'Investigation',
+  'Psychological',
+  'Adventure',
+  'Survival',
+  'Fantasy',
+  'Romance',
+  'Comedy',
+  'Drama',
+  'Historical',
+  'Biography',
+  'News',
+  'Explainer',
+  'Educational',
+  'Travel',
+  'Gaming',
+  'Technology',
+  'Sports',
+  'War History',
+  'Post-Apocalyptic',
+  'Superhero',
+  'Cinematic Story',
+  'Drama Thriller',
+  'Custom',
+];
+
+aiRouter.post('/detect-story-mode', async (req: Request, res: Response) => {
+  try {
+    const {
+      topic = '',
+      idea = '',
+      title = '',
+      script = '',
+      content = '',
+      audience = '',
+      platform = '',
+    } = req.body;
+
+    const prompt = `You are MintMind AI's Adaptive Story Mode Engine classification expert.
+Analyze the following creative inputs and classify the optimal primary Story Mode and 1-2 complementary secondary modes.
+
+ONLY SELECT FROM THESE 31 SUPPORTED MODES:
+${VALID_STORY_MODES.join(', ')}
+
+INPUT METADATA:
+- Topic / Premise: ${topic || title}
+${idea ? `- Idea Concept: ${idea}` : ''}
+${title ? `- Title: ${title}` : ''}
+${content || script ? `- Content / Dialogue excerpt: ${(content || script).slice(0, 500)}` : ''}
+${audience ? `- Audience: ${audience}` : ''}
+${platform ? `- Target Platform: ${platform}` : ''}
+
+CRITICAL RULES:
+1. Return a strictly valid JSON object matching the schema below.
+2. primaryMode MUST be an exact string from the supported 31 modes.
+3. secondaryModes MUST be an array of 1 or 2 distinct supported modes different from primaryMode.
+4. confidence MUST be an internal estimated integer between 55 and 95 (treat as an internal estimate, never claim certainty).
+5. reasoning MUST be a concise 1-2 sentence explanation of why this mode fits the emotional pacing, hook structure, and narrative style.
+
+JSON SCHEMA:
+{
+  "primaryMode": "Documentary",
+  "secondaryModes": ["Investigation", "Explainer"],
+  "confidence": 85,
+  "reasoning": "Reasoning string here."
+}`;
+
+    const raw = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
+      prompt,
+    });
+
+    const primaryMode = raw?.primaryMode && VALID_STORY_MODES.includes(raw.primaryMode)
+      ? raw.primaryMode
+      : 'Documentary';
+
+    const secondaryModes: string[] = Array.isArray(raw?.secondaryModes)
+      ? raw.secondaryModes.filter((m: string) => VALID_STORY_MODES.includes(m) && m !== primaryMode).slice(0, 2)
+      : [];
+
+    const confidence = typeof raw?.confidence === 'number'
+      ? Math.max(50, Math.min(96, Math.round(raw.confidence)))
+      : 82;
+
+    const reasoning = typeof raw?.reasoning === 'string' && raw.reasoning.trim()
+      ? raw.reasoning.trim()
+      : `Classified as ${primaryMode} based on narrative tension, subject matter, and format requirements.`;
+
+    res.json({
+      success: true,
+      detection: {
+        primaryMode,
+        secondaryModes,
+        confidence,
+        reasoning,
+      },
+    });
+  } catch (err: any) {
+    console.warn('AI detect-story-mode fallback triggered:', err?.message || err);
+    // Intelligent heuristic fallback
+    const { topic = '', idea = '', title = '', content = '' } = req.body || {};
+    const text = `${topic} ${idea} ${title} ${content}`.toLowerCase();
+    let detectedMode = 'Documentary';
+    let secondary = ['Explainer', 'Investigation'];
+
+    if (text.includes('crime') || text.includes('murder') || text.includes('police') || text.includes('heist') || text.includes('case')) {
+      detectedMode = 'Crime';
+      secondary = ['Investigation', 'Mystery'];
+    } else if (text.includes('horror') || text.includes('creepy') || text.includes('ghost') || text.includes('terrifying') || text.includes('scary')) {
+      detectedMode = 'Horror';
+      secondary = ['Thriller', 'Psychological'];
+    } else if (text.includes('sci-fi') || text.includes('ai') || text.includes('robot') || text.includes('future') || text.includes('quantum')) {
+      detectedMode = 'Sci-Fi';
+      secondary = ['Technology', 'Space'];
+    } else if (text.includes('space') || text.includes('nasa') || text.includes('planet') || text.includes('galaxy') || text.includes('astronomy')) {
+      detectedMode = 'Space';
+      secondary = ['Sci-Fi', 'Documentary'];
+    } else if (text.includes('war') || text.includes('battle') || text.includes('wwii') || text.includes('soldier') || text.includes('army')) {
+      detectedMode = 'War History';
+      secondary = ['Historical', 'Documentary'];
+    } else if (text.includes('history') || text.includes('ancient') || text.includes('empire') || text.includes('medieval')) {
+      detectedMode = 'Historical';
+      secondary = ['Documentary', 'Biography'];
+    } else if (text.includes('travel') || text.includes('flight') || text.includes('island') || text.includes('destination')) {
+      detectedMode = 'Travel';
+      secondary = ['Adventure', 'Explainer'];
+    } else if (text.includes('game') || text.includes('gaming') || text.includes('minecraft') || text.includes('boss') || text.includes('esports')) {
+      detectedMode = 'Gaming';
+      secondary = ['Action', 'Comedy'];
+    } else if (text.includes('tech') || text.includes('iphone') || text.includes('hardware') || text.includes('review') || text.includes('gadget')) {
+      detectedMode = 'Technology';
+      secondary = ['Explainer', 'Educational'];
+    } else if (text.includes('sport') || text.includes('football') || text.includes('nba') || text.includes('athlete') || text.includes('championship')) {
+      detectedMode = 'Sports';
+      secondary = ['Action', 'Biography'];
+    }
+
+    res.json({
+      success: true,
+      detection: {
+        primaryMode: detectedMode,
+        secondaryModes: secondary,
+        confidence: 75,
+        reasoning: `Identified as ${detectedMode} via thematic keyword and platform heuristic alignment.`,
+      },
     });
   }
 });
@@ -538,12 +754,17 @@ aiRouter.post('/generate-script', async (req: Request, res: Response) => {
       referenceMaterial = '',
       keyPoints = [],
       brandVoice = '',
+      primaryMode = 'Documentary',
+      secondaryModes = [],
+      modeDetectionConfidence = 85,
+      modeReasoning = '',
+      modeProfile,
     } = req.body;
 
     const isShortForm =
       platform.includes('Short') || platform.includes('Reel') || platform.includes('Story');
 
-    const prompt = `You are MintMind AI, the master scriptwriter for top creators.
+    const prompt = `You are MintMind AI, the master scriptwriter and visual director for top creators.
 Generate a complete, production-ready script and scene-by-scene breakdown for:
 
 Topic: ${topic}
@@ -560,10 +781,32 @@ ${brandVoice ? `Creator Voice: ${brandVoice}` : ''}
 ${keyPoints && keyPoints.length ? `Mandatory Core Points: ${keyPoints.join(', ')}` : ''}
 ${referenceMaterial ? `Reference Notes: ${referenceMaterial}` : ''}
 
+=== ADAPTIVE STORY MODE ENGINE DIRECTIVES ===
+Primary Story Mode: ${primaryMode}
+${secondaryModes && secondaryModes.length ? `Secondary Creative Accents: ${secondaryModes.join(', ')}` : ''}
+${modeProfile?.narrativeStructure ? `Narrative Structure Guide: ${modeProfile.narrativeStructure}` : ''}
+${modeProfile?.pacing ? `Pacing Signature: ${modeProfile.pacing}` : ''}
+${modeProfile?.hookStyle ? `Hook Style Directive: ${modeProfile.hookStyle}` : ''}
+${modeProfile?.visualStyle ? `Visual Aesthetic Directive: ${modeProfile.visualStyle}` : ''}
+${modeProfile?.musicDirection ? `Music Direction: ${modeProfile.musicDirection}` : ''}
+${modeProfile?.soundDirection ? `Sound Design / SFX: ${modeProfile.soundDirection}` : ''}
+
+${isShortForm
+  ? `SHORT-FORM VERTICAL RETENTION DIRECTIVE:
+- Hook in the first 1.5 seconds with high curiosity/conflict matching the ${primaryMode} hook style.
+- Rapid visual scene changes every 2-4 seconds.
+- Kinetic on-screen keyword captions.`
+  : `LONG-FORM CINEMATIC DIRECTIVE:
+- Structured chapter-by-chapter progression following ${primaryMode} narrative architecture.
+- Atmospheric pacing and clear visual scene transitions.`
+}
+
 You MUST return a strictly valid JSON object matching this structure:
 {
   "title": "${topic}",
   "type": "${platform}",
+  "primaryMode": "${primaryMode}",
+  "secondaryModes": ${JSON.stringify(secondaryModes || [])},
   "sections": [
     {
       "id": "sec_1",
@@ -583,6 +826,9 @@ You MUST return a strictly valid JSON object matching this structure:
       "sceneNumber": 1,
       "duration": "5s",
       "durationSec": 5,
+      "sceneMode": "${primaryMode}",
+      "primaryMode": "${primaryMode}",
+      "secondaryModes": ${JSON.stringify(secondaryModes || [])},
       "voiceover": "Opening hook dialogue line spoken in this scene...",
       "spokenDialogue": "Opening hook dialogue line spoken in this scene...",
       "visualDescription": "Host standing with neon rim light looking directly into lens",
@@ -599,9 +845,8 @@ You MUST return a strictly valid JSON object matching this structure:
   ]
 }`;
 
-    const script = await geminiService.generateStructuredJSON<any>({
+    const script = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     if (script && Array.isArray(script.sections)) {
@@ -615,6 +860,11 @@ You MUST return a strictly valid JSON object matching this structure:
     }
 
     if (script && Array.isArray(script.scenes)) {
+      let runningSec = 0;
+      const isVertical = String(platform || '').toLowerCase().includes('short') || String(platform || '').toLowerCase().includes('reel');
+      const framing = isVertical ? '9:16 Vertical' : '16:9 Widescreen';
+      const aspectParam = isVertical ? '--ar 9:16' : '--ar 16:9';
+
       script.scenes = script.scenes.map((sc: any, idx: number) => {
         const durSec = typeof sc.durationSec === 'number'
           ? sc.durationSec
@@ -622,10 +872,48 @@ You MUST return a strictly valid JSON object matching this structure:
             ? sc.duration
             : parseInt(String(sc.duration || '5'), 10) || 5;
 
+        const startSec = runningSec;
+        const endSec = runningSec + durSec;
+        runningSec = endSec;
+
+        const pad = (n: number) => Math.floor(n).toString().padStart(2, '0');
+        const formatTime = (s: number) => `${pad(s / 60)}:${pad(s % 60)}`;
+        const timecode = `${formatTime(startSec)} - ${formatTime(endSec)}`;
+
+        const words = (sc.voiceover || sc.spokenDialogue || '').trim().split(/\s+/).filter(Boolean);
+        const wordCount = words.length;
+
+        const shotType = sc.shotType || sc.cameraDirection || (idx === 0 ? 'Wide Shot' : 'Medium Shot');
+        const movement = sc.cameraMovement || (idx % 2 === 0 ? 'Slow Push-In / Dolly' : 'Pan Left/Right');
+
+        const shotPlan = sc.shotPlan || {
+          shotType,
+          movement,
+          framing,
+          lightingMood: sc.lightingMood || 'High-contrast cinematic lighting with volumetric depth',
+          colorGrade: `${primaryMode} color palette with calibrated saturation`,
+          focalPoint: sc.bRollSuggestion || sc.visualDescription?.slice(0, 70) || 'Subject focus',
+          visualPrompt: `Cinematic ${shotType.toLowerCase()}, ${movement.toLowerCase()}. ${sc.visualDescription || ''}. ${sc.lightingMood || 'Atmospheric lighting'}. 8k resolution, ARRI Alexa 35, photorealistic. ${aspectParam}`,
+          cinematicNotes: `Transition: ${sc.transition || 'Cut'}. SFX: ${sc.sfxMusic || sc.sfx || 'Ambient'}`,
+        };
+
+        const audioTiming = sc.audioTiming || {
+          startSec,
+          endSec,
+          durationSec: durSec,
+          timecode,
+          wordCount,
+          speechRateWPM: Math.round((wordCount / (durSec || 5)) * 60) || 145,
+          isSyncedToAudioFile: false,
+        };
+
         return {
           sceneNumber: typeof sc.sceneNumber === 'number' ? sc.sceneNumber : idx + 1,
           duration: `${durSec}s`,
           durationSec: durSec,
+          sceneMode: sc.sceneMode || primaryMode || 'Documentary',
+          primaryMode: sc.primaryMode || primaryMode || 'Documentary',
+          secondaryModes: Array.isArray(sc.secondaryModes) ? sc.secondaryModes : (secondaryModes || []),
           voiceover: sc.voiceover || sc.spokenDialogue || '',
           visualDescription: sc.visualDescription || sc.action || '',
           bRollSuggestion: sc.bRollSuggestion || '',
@@ -634,9 +922,18 @@ You MUST return a strictly valid JSON object matching this structure:
           transition: sc.transition || 'Cut',
           sfxMusic: sc.sfxMusic || sc.sfx || '',
           sfx: sc.sfx || sc.sfxMusic || '',
+          shotPlan,
+          audioTiming,
           ...sc,
         };
       });
+    }
+
+    if (script) {
+      script.primaryMode = script.primaryMode || primaryMode || 'Documentary';
+      script.secondaryModes = Array.isArray(script.secondaryModes) ? script.secondaryModes : (secondaryModes || []);
+      script.modeDetectionConfidence = modeDetectionConfidence || 85;
+      script.modeReasoning = modeReasoning || '';
     }
 
     res.json({ success: true, script });
@@ -730,9 +1027,8 @@ Return a strictly valid JSON object:
   "explanation": "Brief 1-sentence note of what was changed and why it enhances the script"
 }`;
 
-    const parsed = await geminiService.generateStructuredJSON<any>({
+    const parsed = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, ...parsed });
@@ -784,9 +1080,8 @@ Return a strictly valid JSON object with:
   }
 }`;
 
-    const seo = await geminiService.generateStructuredJSON<any>({
+    const seo = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, seo });
@@ -826,9 +1121,8 @@ Return a strictly valid JSON array of 3 concepts:
   }
 ]`;
 
-    const thumbnails = await geminiService.generateStructuredJSON<any[]>({
+    const thumbnails = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any[]>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, thumbnails });
@@ -892,9 +1186,8 @@ Return a strictly valid JSON object with this exact shape:
   }
 }`;
 
-    const repurpose = await geminiService.generateStructuredJSON<any>({
+    const repurpose = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, repurpose });
@@ -933,9 +1226,8 @@ You must return a single, unified, strictly valid JSON object containing:
 
 Strict JSON format only.`;
 
-    const contentPackage = await geminiService.generateStructuredJSON<any>({
+    const contentPackage = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
       prompt,
-      model: 'gemini-3.5-flash-lite',
     });
 
     res.json({ success: true, contentPackage });

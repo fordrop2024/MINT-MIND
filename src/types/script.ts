@@ -1,4 +1,5 @@
 import type { PlatformOption, LanguageOption, ToneOption } from './idea';
+import type { StoryMode } from './storyMode';
 
 export type ScriptType =
   | 'YouTube Long-form'
@@ -29,6 +30,51 @@ export type AISectionAction =
   | 'alternative'
   | 'alternative_angle';
 
+export type CameraShotType =
+  | 'Extreme Wide Shot'
+  | 'Wide Shot'
+  | 'Medium Shot'
+  | 'Medium Close-Up'
+  | 'Close-Up'
+  | 'Extreme Close-Up'
+  | 'Over-the-Shoulder'
+  | 'POV'
+  | 'Drone Aerial'
+  | 'Dutch Angle'
+  | 'Macro';
+
+export type CameraMovement =
+  | 'Static'
+  | 'Pan Left/Right'
+  | 'Tilt Up/Down'
+  | 'Slow Push-In / Dolly'
+  | 'Pull-Out'
+  | 'Tracking / Gimbal'
+  | 'Handheld Organic'
+  | 'Whip Pan'
+  | 'Orbit';
+
+export interface ShotPlan {
+  shotType: CameraShotType | string;
+  movement: CameraMovement | string;
+  framing: '16:9 Widescreen' | '9:16 Vertical';
+  lightingMood: string;
+  colorGrade: string;
+  focalPoint: string;
+  visualPrompt: string;
+  cinematicNotes?: string;
+}
+
+export interface AudioTimingSync {
+  startSec: number;
+  endSec: number;
+  timecode: string;
+  durationSec: number;
+  wordCount: number;
+  speechRateWPM: number;
+  isSyncedToAudioFile?: boolean;
+}
+
 export interface ScriptSection {
   id: string;
   name: string;
@@ -48,6 +94,14 @@ export interface ScriptScene {
   transition: string;
   sfxMusic: string;
   sfx?: string;
+  sceneMode?: StoryMode;
+  primaryMode?: StoryMode;
+  secondaryModes?: StoryMode[];
+  shotPlan?: ShotPlan;
+  audioTiming?: AudioTimingSync;
+  lightingMood?: string;
+  shotType?: string;
+  action?: string;
   generatedImage?: string;
   generatedVideo?: {
     status: 'idle' | 'generating' | 'ready' | 'failed';
@@ -156,6 +210,10 @@ export interface ScriptSettings {
   keyPoints?: string[];
   sources?: string[];
   brandVoice?: string;
+  primaryMode?: StoryMode;
+  secondaryModes?: StoryMode[];
+  modeDetectionConfidence?: number;
+  modeReasoning?: string;
 }
 
 export interface Script {
@@ -171,11 +229,24 @@ export interface Script {
   scenes: ScriptScene[];
   versions: ScriptVersion[];
   currentVersionNumber: number;
+  primaryMode?: StoryMode;
+  secondaryModes?: StoryMode[];
+  modeDetectionConfidence?: number;
+  modeReasoning?: string;
   seo?: ScriptSEO;
   thumbnailConcepts?: ThumbnailConcept[];
   repurposeVersions?: RepurposeVersions;
   captions?: CaptionLine[];
   captionConfig?: CaptionConfig;
+  aspectRatio?: '16:9' | '9:16';
+  isAudioSynced?: boolean;
+  audioTrack?: {
+    fileName: string;
+    fileSize: number;
+    durationSec: number;
+    audioUrl?: string;
+    syncedAt: string;
+  };
   createdAt: string;
   updatedAt: string;
 }

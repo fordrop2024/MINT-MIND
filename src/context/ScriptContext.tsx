@@ -19,6 +19,8 @@ import type {
   ContentPackage,
   AISectionAction,
   CaptionLine,
+  CaptionConfig,
+  ShotPlan,
 } from '../types/script';
 import type { Idea } from '../types/idea';
 import { useAuth } from './AuthContext';
@@ -34,6 +36,10 @@ import {
   generateSceneImageAPI,
 } from '../services/aiService';
 import { voiceEngine } from '../services/voiceService';
+import {
+  calculateAudioTimingForScenes,
+  generateProductionShotPlan,
+} from '../services/audioTimingSyncService';
 
 interface ScriptContextType {
   scripts: Script[];
@@ -48,6 +54,12 @@ interface ScriptContextType {
   updateScript: (scriptId: string, updates: Partial<Script>) => Promise<void>;
   updateSection: (scriptId: string, sectionId: string, content: string) => Promise<void>;
   updateScene: (scriptId: string, sceneNumber: number, updates: Partial<ScriptScene>) => Promise<void>;
+  updateSceneShotPlan: (scriptId: string, sceneNumber: number, updates: Partial<ShotPlan>) => Promise<void>;
+  syncScriptToAudio: (
+    scriptId: string,
+    audioDurationSec: number,
+    audioTrackMeta?: { fileName: string; audioUrl?: string; fileSize?: number }
+  ) => Promise<void>;
   deleteScript: (scriptId: string) => Promise<void>;
   saveScript: (script: Script) => Promise<void>;
   setActiveScript: (script: Script | null) => void;
@@ -68,6 +80,8 @@ interface ScriptContextType {
   generateSceneVideo: (scriptId: string, sceneNumber: number) => Promise<void>;
   generateSceneVoiceover: (scriptId: string, sceneNumber: number) => Promise<void>;
   generateCaptions: (scriptId: string) => Promise<void>;
+  updateCaptionConfig: (scriptId: string, config: Partial<CaptionConfig>) => Promise<void>;
+  updateCaptions: (scriptId: string, captions: CaptionLine[]) => Promise<void>;
   createVideoFromScript: (scriptId: string) => Promise<{ timelineReady: boolean; totalScenes: number; message: string }>;
   clearError: () => void;
 }
@@ -225,12 +239,16 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
       const payload: ScriptSettings = {
         ...settings,
         topic: settings.topic || fromIdea?.title || 'Untitled Video',
-        ideaText: settings.ideaText || fromIdea?.concept || '',
+        ideaText: settings.ideaText || fromIdea?.concept || fromIdea?.coreConcept || '',
         audience: settings.audience || fromIdea?.targetAudience || 'General Creators',
         platform: settings.platform || (fromIdea?.recommendedPlatform as any) || 'YouTube Long-form',
         duration: settings.duration || fromIdea?.estimatedDuration || '8-10 minutes',
         language: settings.language || (fromIdea?.metadata?.language as any) || 'English',
         tone: settings.tone || (fromIdea?.metadata?.tone as any) || 'Energetic',
+        primaryMode: settings.primaryMode || fromIdea?.primaryMode || 'Documentary',
+        secondaryModes: settings.secondaryModes || fromIdea?.secondaryModes || [],
+        modeDetectionConfidence: settings.modeDetectionConfidence || fromIdea?.modeDetectionConfidence,
+        modeReasoning: settings.modeReasoning || fromIdea?.modeReasoning,
       };
 
       const result = await generateScriptAPI(payload);
@@ -248,18 +266,25 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         order: typeof sec.order === 'number' ? sec.order : idx + 1,
       }));
 
-      // Normalize scenes ensuring durationSec, voiceover, sfx, and visualDescription are guaranteed
-      const normalizedScenes: ScriptScene[] = (result.scenes || []).map((sc: any, idx: number) => {
+      // Determine aspect ratio based on format
+      const isVertical = String(payload.platform || '').toLowerCase().includes('short') || String(payload.platform || '').toLowerCase().includes('reel');
+      const targetAspect: '16:9' | '9:16' = isVertical ? '9:16' : '16:9';
+
+      // Normalize scenes ensuring durationSec, voiceover, sfx, visualDescription, sceneMode, shotPlan, and audioTiming are guaranteed
+      const initialScenes: ScriptScene[] = (result.scenes || []).map((sc: any, idx: number) => {
         const rawDurSec = typeof sc.durationSec === 'number' 
           ? sc.durationSec 
           : typeof sc.duration === 'number' 
             ? sc.duration 
             : parseInt(String(sc.duration || '5'), 10) || 5;
 
-        return {
+        const baseScene: ScriptScene = {
           sceneNumber: typeof sc.sceneNumber === 'number' ? sc.sceneNumber : idx + 1,
           duration: `${rawDurSec}s`,
           durationSec: rawDurSec,
+          sceneMode: sc.sceneMode || result.primaryMode || payload.primaryMode || 'Documentary',
+          primaryMode: sc.primaryMode || result.primaryMode || payload.primaryMode || 'Documentary',
+          secondaryModes: sc.secondaryModes || result.secondaryModes || payload.secondaryModes || [],
           voiceover: sc.voiceover || sc.spokenDialogue || '',
           visualDescription: sc.visualDescription || sc.action || '',
           bRollSuggestion: sc.bRollSuggestion || '',
@@ -272,7 +297,17 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
           generatedVideo: sc.generatedVideo,
           generatedVoice: sc.generatedVoice,
         };
+
+        const shotPlan = sc.shotPlan || generateProductionShotPlan(baseScene, baseScene.sceneMode, targetAspect);
+        return {
+          ...baseScene,
+          shotPlan,
+        };
       });
+
+      // Synchronize audio timing across scenes
+      const timingResult = calculateAudioTimingForScenes(initialScenes);
+      const normalizedScenes = timingResult.scenes;
 
       const newScript: Script = {
         id: scriptId,
@@ -283,6 +318,12 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         type: payload.platform,
         status: 'draft',
         settings: payload,
+        aspectRatio: targetAspect,
+        isAudioSynced: false,
+        primaryMode: result.primaryMode || payload.primaryMode || 'Documentary',
+        secondaryModes: result.secondaryModes || payload.secondaryModes || [],
+        modeDetectionConfidence: result.modeDetectionConfidence || payload.modeDetectionConfidence || 85,
+        modeReasoning: result.modeReasoning || payload.modeReasoning || '',
         sections: normalizedSections,
         scenes: normalizedScenes,
         versions: [
@@ -292,7 +333,7 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
             title: result.title || payload.topic,
             sections: normalizedSections,
             scenes: normalizedScenes,
-            summaryNote: 'Initial AI script generation',
+            summaryNote: 'Initial AI script generation with Shot Plan & Timing Sync',
           },
         ],
         currentVersionNumber: 1,
@@ -359,6 +400,53 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     );
 
     await updateScript(scriptId, { scenes: updatedScenes });
+  };
+
+  // Update shot plan for individual scene
+  const updateSceneShotPlan = async (
+    scriptId: string,
+    sceneNumber: number,
+    updates: Partial<ShotPlan>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const updatedScenes = target.scenes.map((sc) => {
+      if (sc.sceneNumber !== sceneNumber) return sc;
+      const currentPlan = sc.shotPlan || generateProductionShotPlan(sc, sc.sceneMode, target.aspectRatio || '16:9');
+      return {
+        ...sc,
+        shotPlan: {
+          ...currentPlan,
+          ...updates,
+        },
+      };
+    });
+
+    await updateScript(scriptId, { scenes: updatedScenes });
+  };
+
+  // Synchronize script scenes to uploaded audio file duration
+  const syncScriptToAudio = async (
+    scriptId: string,
+    audioDurationSec: number,
+    audioTrackMeta?: { fileName: string; audioUrl?: string; fileSize?: number }
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) throw new Error('Script not found');
+
+    const syncResult = calculateAudioTimingForScenes(target.scenes, audioDurationSec);
+    await updateScript(scriptId, {
+      scenes: syncResult.scenes,
+      isAudioSynced: true,
+      audioTrack: {
+        fileName: audioTrackMeta?.fileName || 'Audio Track',
+        durationSec: audioDurationSec,
+        audioUrl: audioTrackMeta?.audioUrl,
+        fileSize: audioTrackMeta?.fileSize,
+        syncedAt: new Date().toISOString(),
+      },
+    });
   };
 
   // Delete Script
@@ -693,48 +781,52 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Generate Captions from Voiceover
+  // Generate Captions from Voiceover & Synced Scene Timings
   const generateCaptions = async (scriptId: string): Promise<void> => {
     const target = scripts.find((s) => s.id === scriptId) || activeScript;
     if (!target) throw new Error('Script not found');
 
     setIsGenerating(true);
-    setGenerationStep('Generating word-level timed captions from voiceover...');
+    setGenerationStep('Generating word-level timed captions from voiceover & audio cadence...');
 
     try {
       let currentSec = 0;
       const captions: CaptionLine[] = target.scenes.map((scene, idx) => {
-        const words = scene.voiceover.split(/\s+/);
-        const duration = Math.max(3, Math.round(words.length / 2.3));
-        const startSec = currentSec;
-        const endSec = currentSec + duration;
+        const words = (scene.voiceover || '').trim().split(/\s+/).filter(Boolean);
+        const duration = scene.audioTiming?.durationSec || scene.durationSec || Math.max(3, Math.round(words.length / 2.3));
+        const startSec = scene.audioTiming?.startSec ?? currentSec;
+        const endSec = scene.audioTiming?.endSec ?? (startSec + duration);
         currentSec = endSec;
+
+        const timePerWord = words.length > 0 ? duration / words.length : duration;
 
         return {
           id: `cap-${idx + 1}`,
-          startSec,
-          endSec,
-          text: scene.voiceover,
+          startSec: Number(startSec.toFixed(3)),
+          endSec: Number(endSec.toFixed(3)),
+          text: scene.voiceover || `Scene ${scene.sceneNumber}`,
           words: words.map((w, wIdx) => ({
             word: w,
-            startSec: startSec + (wIdx / words.length) * duration,
-            endSec: startSec + ((wIdx + 1) / words.length) * duration,
+            startSec: Number((startSec + wIdx * timePerWord).toFixed(3)),
+            endSec: Number((startSec + (wIdx + 1) * timePerWord).toFixed(3)),
           })),
         };
       });
 
+      const existingConfig: CaptionConfig = target.captionConfig || {
+        style: 'bold_pop',
+        fontFamily: 'Montserrat, sans-serif',
+        fontSize: 28,
+        textColor: '#ffffff',
+        highlightColor: '#22d3ee',
+        position: 'bottom',
+        animation: 'word_by_word',
+        language: target.settings.language || 'English',
+      };
+
       await updateScript(scriptId, {
         captions,
-        captionConfig: {
-          style: 'bold_pop',
-          fontFamily: 'Montserrat, sans-serif',
-          fontSize: 28,
-          textColor: '#ffffff',
-          highlightColor: '#22d3ee',
-          position: 'bottom',
-          animation: 'word_by_word',
-          language: target.settings.language || 'English',
-        },
+        captionConfig: existingConfig,
       });
 
       setIsGenerating(false);
@@ -745,6 +837,35 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
       setError(err.message || 'Failed to generate captions.');
       throw err;
     }
+  };
+
+  // Update Caption Configuration & Styling
+  const updateCaptionConfig = async (
+    scriptId: string,
+    configUpdates: Partial<CaptionConfig>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const currentConfig: CaptionConfig = target.captionConfig || {
+      style: 'bold_pop',
+      fontFamily: 'Montserrat, sans-serif',
+      fontSize: 28,
+      textColor: '#ffffff',
+      highlightColor: '#22d3ee',
+      position: 'bottom',
+      animation: 'word_by_word',
+      language: target.settings.language || 'English',
+    };
+
+    await updateScript(scriptId, {
+      captionConfig: { ...currentConfig, ...configUpdates },
+    });
+  };
+
+  // Update Captions List
+  const updateCaptions = async (scriptId: string, captions: CaptionLine[]): Promise<void> => {
+    await updateScript(scriptId, { captions });
   };
 
   // Create Video From Script Workflow
@@ -794,6 +915,8 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         updateScript,
         updateSection,
         updateScene,
+        updateSceneShotPlan,
+        syncScriptToAudio,
         deleteScript,
         saveScript,
         setActiveScript,
@@ -809,6 +932,8 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         generateSceneVideo,
         generateSceneVoiceover,
         generateCaptions,
+        updateCaptionConfig,
+        updateCaptions,
         createVideoFromScript,
         clearError: () => setError(null),
       }}

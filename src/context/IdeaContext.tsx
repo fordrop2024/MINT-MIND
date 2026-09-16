@@ -242,20 +242,31 @@ export function IdeaProvider({ children }: { children: React.ReactNode }) {
   const updateIdea = async (ideaId: string, updates: Partial<Idea>): Promise<void> => {
     setError(null);
     const timestamp = new Date().toISOString();
+    const existingIdea = ideas.find((i) => i.id === ideaId);
+    const mergedIdea: Idea = {
+      ...(existingIdea || ({ id: ideaId, title: updates.title || 'Untitled Idea' } as any)),
+      ...updates,
+      id: ideaId,
+      ownerId: user?.id || 'guest',
+      updatedAt: timestamp,
+    };
 
     if (authState === 'AUTHENTICATED' && user && isFirebaseConfigured && db) {
       try {
         const ideaRef = doc(db, 'users', user.id, 'ideas', ideaId);
-        await updateDoc(ideaRef, {
-          ...updates,
-          updatedAt: timestamp,
+        await setDoc(ideaRef, mergedIdea, { merge: true });
+        setIdeas((prev) => {
+          const next = prev.map((i) =>
+            i.id === ideaId ? mergedIdea : i
+          );
+          saveLocalIdeas(next);
+          return next;
         });
       } catch (err) {
         console.error('Failed to update idea in Firestore:', err);
-        handleFirestoreError(err, OperationType.UPDATE, `users/${user.id}/ideas/${ideaId}`);
         setIdeas((prev) => {
           const next = prev.map((i) =>
-            i.id === ideaId ? { ...i, ...updates, updatedAt: timestamp } : i
+            i.id === ideaId ? mergedIdea : i
           );
           saveLocalIdeas(next);
           return next;
@@ -264,7 +275,7 @@ export function IdeaProvider({ children }: { children: React.ReactNode }) {
     } else {
       setIdeas((prev) => {
         const next = prev.map((i) =>
-          i.id === ideaId ? { ...i, ...updates, updatedAt: timestamp } : i
+          i.id === ideaId ? mergedIdea : i
         );
         saveLocalIdeas(next);
         return next;

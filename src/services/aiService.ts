@@ -13,11 +13,26 @@ import type {
   RepurposeVersions,
   ContentPackage,
 } from '../types/script';
+import type {
+  StoryModeDetectionInput,
+  StoryModeDetection,
+} from '../types/storyMode';
+import type {
+  AIProviderStatus,
+  AIProviderId,
+  ProviderTestResult,
+} from '../types/aiProvider';
+import { getStoryModeProfile, heuristicDetectStoryMode } from './storyModeEngine';
 
 export interface AIStatus {
   configured: boolean;
   textModel: string;
   provider: string;
+  providerId?: AIProviderId;
+  type?: 'cloud' | 'local';
+  health?: 'connected' | 'disconnected' | 'error' | 'standby';
+  message?: string;
+  availableModels?: string[];
 }
 
 /**
@@ -193,11 +208,33 @@ export async function improveIdeaAPI(idea: Idea): Promise<Partial<Idea>> {
   return data.improved || {};
 }
 
+export async function detectStoryModeAPI(input: StoryModeDetectionInput): Promise<StoryModeDetection> {
+  try {
+    const data = await safeFetchJSON('/api/ai/detect-story-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+
+    if (data?.detection && data.detection.primaryMode) {
+      return data.detection;
+    }
+    return heuristicDetectStoryMode(input);
+  } catch (err) {
+    console.warn('Backend story mode detection fallback:', err);
+    return heuristicDetectStoryMode(input);
+  }
+}
+
 export async function generateScriptAPI(settings: ScriptSettings): Promise<Partial<Script>> {
+  const modeProfile = getStoryModeProfile(settings.primaryMode);
   const data = await safeFetchJSON('/api/ai/generate-script', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
+    body: JSON.stringify({
+      ...settings,
+      modeProfile,
+    }),
   });
 
   return data.script;
@@ -434,4 +471,43 @@ export async function summarizeTextAI(
 
   return data.summary;
 }
+
+/**
+ * AI Provider Management APIs
+ */
+export async function getAIProvidersAPI(): Promise<{
+  activeProviderId: AIProviderId;
+  providers: AIProviderStatus[];
+}> {
+  const data = await safeFetchJSON('/api/ai/providers');
+  return {
+    activeProviderId: data.activeProviderId || 'gemini',
+    providers: data.providers || [],
+  };
+}
+
+export async function selectAIProviderAPI(
+  providerId: AIProviderId,
+  config?: { baseURL?: string; apiKey?: string; defaultModel?: string }
+): Promise<AIProviderStatus> {
+  const data = await safeFetchJSON('/api/ai/providers/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ providerId, config }),
+  });
+  return data.status;
+}
+
+export async function testAIProviderAPI(
+  providerId?: AIProviderId,
+  config?: { baseURL?: string; apiKey?: string; defaultModel?: string }
+): Promise<ProviderTestResult> {
+  const data = await safeFetchJSON('/api/ai/providers/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ providerId, config }),
+  });
+  return data.result;
+}
+
 

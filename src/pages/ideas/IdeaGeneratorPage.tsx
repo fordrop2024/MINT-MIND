@@ -42,6 +42,10 @@ import type {
   IdeaStatus,
   IdeaVariation,
 } from '../../types/idea';
+import type { StoryMode } from '../../types/storyMode';
+import { StoryModeSelector } from '../../components/storyMode/StoryModeSelector';
+import { StoryModeBadge } from '../../components/storyMode/StoryModeBadge';
+import { detectStoryModeAPI } from '../../services/aiService';
 import { IdeaAnalysisModal } from '../../components/ideas/IdeaAnalysisModal';
 import { IdeaVariationsModal } from '../../components/ideas/IdeaVariationsModal';
 
@@ -171,6 +175,13 @@ export function IdeaGeneratorPage() {
   const [showAdvancedInputs, setShowAdvancedInputs] = useState(false);
   const [count, setCount] = useState<number>(4);
 
+  // Adaptive Story Mode Engine state
+  const [primaryMode, setPrimaryMode] = useState<StoryMode>('Documentary');
+  const [secondaryModes, setSecondaryModes] = useState<StoryMode[]>(['Explainer']);
+  const [modeConfidence, setModeConfidence] = useState<number | undefined>(undefined);
+  const [modeReasoning, setModeReasoning] = useState<string | undefined>(undefined);
+  const [isDetectingMode, setIsDetectingMode] = useState<boolean>(false);
+
   // Modals state
   const [selectedAuditIdea, setSelectedAuditIdea] = useState<Idea | null>(null);
   const [auditData, setAuditData] = useState<any>(null);
@@ -184,6 +195,27 @@ export function IdeaGeneratorPage() {
 
   // Status Filter in Saved Ideas Tab
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  const handleAutoDetectMode = async () => {
+    setIsDetectingMode(true);
+    try {
+      const detection = await detectStoryModeAPI({
+        topic: topic.trim() || niche,
+        audience: targetAudience,
+        platform,
+      });
+      if (detection) {
+        setPrimaryMode(detection.primaryMode);
+        setSecondaryModes(detection.secondaryModes || []);
+        setModeConfidence(detection.confidence);
+        setModeReasoning(detection.reasoning);
+      }
+    } catch (err) {
+      console.warn('Auto-detect story mode failed:', err);
+    } finally {
+      setIsDetectingMode(false);
+    }
+  };
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -205,6 +237,8 @@ export function IdeaGeneratorPage() {
         tone,
         videoDuration,
         goal,
+        primaryMode,
+        secondaryModes,
         currentTrendContext: currentTrendContext.trim() || undefined,
         competitorReference: competitorReference.trim() || undefined,
         keywords: parsedKeywords.length > 0 ? parsedKeywords : undefined,
@@ -265,7 +299,7 @@ export function IdeaGeneratorPage() {
       await createScript(
         {
           topic: idea.title,
-          ideaText: idea.concept,
+          ideaText: idea.concept || idea.coreConcept,
           audience: idea.targetAudience,
           language: (idea.metadata?.language as any) || language,
           tone: (idea.metadata?.tone as any) || tone,
@@ -274,6 +308,10 @@ export function IdeaGeneratorPage() {
           narrationStyle: 'Engaging conversational narrator',
           ctaStyle: idea.cta || 'Subscribe and comment',
           keyPoints: idea.keywords,
+          primaryMode: idea.primaryMode || primaryMode,
+          secondaryModes: idea.secondaryModes || secondaryModes,
+          modeDetectionConfidence: idea.modeDetectionConfidence || modeConfidence,
+          modeReasoning: idea.modeReasoning || modeReasoning,
         },
         idea
       );
@@ -693,6 +731,20 @@ export function IdeaGeneratorPage() {
                 )}
               </div>
 
+              {/* Adaptive Story Mode Engine Selector */}
+              <div className="pt-1">
+                <StoryModeSelector
+                  primaryMode={primaryMode}
+                  secondaryModes={secondaryModes}
+                  confidence={modeConfidence}
+                  reasoning={modeReasoning}
+                  onPrimaryChange={(m) => setPrimaryMode(m)}
+                  onSecondaryChange={(ms) => setSecondaryModes(ms)}
+                  onAutoDetect={handleAutoDetectMode}
+                  isDetecting={isDetectingMode}
+                />
+              </div>
+
               {/* Count & Submit Button */}
               <div className="pt-2">
                 <button
@@ -780,7 +832,7 @@ export function IdeaGeneratorPage() {
                     >
                       {/* Top Badges & Metric Scores */}
                       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/60 pb-3">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                             {idea.recommendedPlatform}
                           </span>
@@ -788,6 +840,13 @@ export function IdeaGeneratorPage() {
                             <Clock className="w-3 h-3 text-slate-500" />
                             {idea.estimatedDuration}
                           </span>
+                          {idea.primaryMode && (
+                            <StoryModeBadge
+                              mode={idea.primaryMode}
+                              confidence={idea.modeDetectionConfidence}
+                              size="sm"
+                            />
+                          )}
                         </div>
 
                         {/* Scores Grid */}
@@ -1046,10 +1105,19 @@ export function IdeaGeneratorPage() {
                   className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 hover:border-slate-700 transition-all space-y-3 flex flex-col justify-between"
                 >
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-                        {idea.recommendedPlatform}
-                      </span>
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+                          {idea.recommendedPlatform}
+                        </span>
+                        {idea.primaryMode && (
+                          <StoryModeBadge
+                            mode={idea.primaryMode}
+                            confidence={idea.modeDetectionConfidence}
+                            size="sm"
+                          />
+                        )}
+                      </div>
                       {/* Status Selector */}
                       <select
                         value={idea.status}
