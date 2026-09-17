@@ -137,6 +137,35 @@
         "updatedAt": { "type": "string", "description": "Last updated timestamp" }
       },
       "required": ["id", "ownerId", "title", "createdAt", "updatedAt"]
+    },
+    "MediaAsset": {
+      "title": "MediaAsset",
+      "description": "Standalone media asset (image, video, voiceover, music, SFX, b-roll) associated with projects and scenes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique asset identifier" },
+        "assetId": { "type": "string", "description": "Asset ID alias" },
+        "projectId": { "type": "string", "description": "Optional associated project ID" },
+        "scriptId": { "type": "string", "description": "Optional associated script ID" },
+        "sceneId": { "type": "string", "description": "Optional scene ID" },
+        "sceneNumber": { "type": "number", "description": "Scene index number" },
+        "type": { "type": "string", "enum": ["image", "video", "audio", "voiceover", "music", "sound-effect", "b-roll"], "description": "Media classification" },
+        "source": { "type": "string", "enum": ["ai-generated", "uploaded", "stock", "manual", "placeholder"], "description": "Asset acquisition source" },
+        "status": { "type": "string", "enum": ["required", "pending", "generating", "ready", "failed", "missing"], "description": "Asset lifecycle state" },
+        "filename": { "type": "string", "description": "Asset label or file name" },
+        "url": { "type": "string", "description": "Direct asset URL or data URI" },
+        "path": { "type": "string", "description": "Storage path" },
+        "thumbnailUrl": { "type": "string", "description": "Preview thumbnail URL" },
+        "duration": { "type": "number", "description": "Duration in seconds for time-based media" },
+        "width": { "type": "number", "description": "Pixel width" },
+        "height": { "type": "number", "description": "Pixel height" },
+        "aspectRatio": { "type": "string", "description": "Aspect framing" },
+        "prompt": { "type": "string", "description": "Generation prompt or description" },
+        "metadata": { "type": "object", "description": "Additional technical specifications" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["id", "type", "source", "status", "filename", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -155,6 +184,10 @@
     "/users/{userId}/scripts/{scriptId}": {
       "schema": "Script",
       "description": "User-owned structured and scene-by-scene script documents"
+    },
+    "/users/{userId}/mediaAssets/{assetId}": {
+      "schema": "MediaAsset",
+      "description": "User-owned media assets linked to scripts and scenes"
     },
     "/users/{userId}/competitors/{competitorId}": {
       "schema": "Competitor",

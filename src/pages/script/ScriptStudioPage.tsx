@@ -60,6 +60,8 @@ import type {
 import { voiceEngine } from '../../services/voiceService';
 import { CompareVersionsModal } from '../../components/script/CompareVersionsModal';
 import { KineticCaptionStudio } from '../../components/script/KineticCaptionStudio';
+import { SceneBreakdownStudio } from '../../components/script/SceneBreakdownStudio';
+import { MediaAssetLibrary } from '../../components/media/MediaAssetLibrary';
 import type { StoryMode } from '../../types/storyMode';
 import { StoryModeBadge } from '../../components/storyMode/StoryModeBadge';
 import { StoryModeSelector } from '../../components/storyMode/StoryModeSelector';
@@ -121,11 +123,12 @@ export function ScriptStudioPage() {
     createVideoFromScript,
     deleteScript,
     clearError,
+    mediaAssets,
   } = useScript();
 
   // Active view tab
   const [activeTab, setActiveTab] = useState<
-    'editor' | 'scenes' | 'captions' | 'seo' | 'thumbnails' | 'repurpose'
+    'editor' | 'scenes' | 'media' | 'captions' | 'seo' | 'thumbnails' | 'repurpose'
   >('editor');
 
   // Audio Sync & Shot Plan State
@@ -542,6 +545,18 @@ export function ScriptStudioPage() {
             </button>
 
             <button
+              onClick={() => setActiveTab('media')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 shrink-0 transition-all ${
+                activeTab === 'media'
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/25'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Media Assets ({mediaAssets.length})
+            </button>
+
+            <button
               onClick={() => {
                 setActiveTab('captions');
                 if (!activeScript.captions || activeScript.captions.length === 0) {
@@ -848,423 +863,33 @@ export function ScriptStudioPage() {
             </div>
           )}
 
-          {/* TAB 2: SCENE-BY-SCENE STORYBOARD BREAKDOWN & SHOT PLAN */}
+          {/* TAB 2: SCENE BREAKDOWN & PRODUCTION SHOT PLAN */}
           {activeTab === 'scenes' && (
-            <div className="space-y-6">
-              {/* Audio Timing Sync & Cadence Engine Card */}
-              <div className="p-5 rounded-2xl glass-panel border border-slate-800 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Music className="w-4 h-4 text-cyan-400" />
-                    <h3 className="text-sm font-bold text-white font-display">
-                      Audio Timing Sync & Shot Plan Engine
-                    </h3>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
-                      {activeScript.isAudioSynced ? 'Synced to Audio Track' : 'Speech Cadence Sync'}
-                    </span>
-                  </div>
+            <SceneBreakdownStudio
+              script={activeScript}
+              onNotification={showNotification}
+            />
+          )}
 
-                  <div className="flex items-center gap-2">
-                    <label className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer">
-                      <UploadCloud className={`w-3.5 h-3.5 ${isUploadingAudio ? 'animate-bounce' : ''}`} />
-                      <span>{isUploadingAudio ? 'Analyzing Audio...' : 'Sync Audio File'}</span>
-                      <input
-                        type="file"
-                        accept="audio/mp3,audio/wav,audio/aac,audio/m4a,audio/*"
-                        onChange={handleAudioFileUpload}
-                        disabled={isUploadingAudio}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-                </div>
-
-                {/* Telemetry Bar */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                    <div className="text-[10px] font-mono text-slate-400 uppercase">Total Audio Duration</div>
-                    <div className="text-base font-bold text-cyan-400 font-mono mt-0.5">
-                      {formatTimecode(
-                        activeScript.scenes?.reduce((acc, s) => acc + (s.audioTiming?.durationSec || s.durationSec || 5), 0) || 0
-                      )}{' '}
-                      <span className="text-[11px] font-normal text-slate-400">
-                        (~{Math.round(activeScript.scenes?.reduce((acc, s) => acc + (s.audioTiming?.durationSec || s.durationSec || 5), 0) || 0)}s)
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                    <div className="text-[10px] font-mono text-slate-400 uppercase">Total Spoken Words</div>
-                    <div className="text-base font-bold text-white font-mono mt-0.5">
-                      {activeScript.scenes?.reduce((acc, s) => {
-                        const words = (s.voiceover || '').trim().split(/\s+/).filter(Boolean).length;
-                        return acc + words;
-                      }, 0)}{' '}
-                      <span className="text-[11px] font-normal text-slate-400">words</span>
-                    </div>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                    <div className="text-[10px] font-mono text-slate-400 uppercase">Speech Cadence (WPM)</div>
-                    <div className="text-base font-bold text-indigo-400 font-mono mt-0.5">
-                      {activeScript.scenes?.[0]?.audioTiming?.speechRateWPM || cadencePresetWPM} WPM
-                    </div>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                    <div className="text-[10px] font-mono text-slate-400 uppercase">Aspect Framing</div>
-                    <div className="text-base font-bold text-amber-400 font-mono mt-0.5">
-                      {activeScript.aspectRatio === '9:16' || activeScript.type?.toLowerCase().includes('short') ? '9:16 Vertical' : '16:9 Cinema'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Cadence Preset Buttons */}
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                    <Sliders className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Recalibrate Cadence:</span>
-                    <button
-                      onClick={() => handleApplyCadencePreset(125)}
-                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[11px] border border-slate-700 transition-colors"
-                    >
-                      Dramatic (125 WPM)
-                    </button>
-                    <button
-                      onClick={() => handleApplyCadencePreset(145)}
-                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono text-[11px] border border-slate-700 transition-colors"
-                    >
-                      Natural (145 WPM)
-                    </button>
-                    <button
-                      onClick={() => handleApplyCadencePreset(165)}
-                      className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-[11px] border border-slate-700 transition-colors"
-                    >
-                      Fast / Shorts (165 WPM)
-                    </button>
-                  </div>
-
-                  {activeScript.audioTrack && (
-                    <div className="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5 bg-emerald-950/40 px-2.5 py-1 rounded-lg border border-emerald-500/30">
-                      <CheckCircle className="w-3.5 h-3.5" />
-                      <span>Track: {activeScript.audioTrack.fileName} ({formatTimecode(activeScript.audioTrack.durationSec)})</span>
-                    </div>
-                  )}
+          {/* TAB 2.5: MEDIA ASSET PIPELINE & LIBRARY */}
+          {activeTab === 'media' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-cyan-400" />
+                    Media Asset Pipeline
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Manage visual prompts, video footage, voiceover, and audio tracks linked across all scenes.
+                  </p>
                 </div>
               </div>
 
-              {/* Scene Shot List */}
-              <div className="space-y-4">
-                {activeScript.scenes?.map((scene) => {
-                  const isPlaying = playingSceneNum === scene.sceneNumber;
-                  const isExpandedShotPlan = expandedShotPlanScene === scene.sceneNumber;
-                  const currentShotPlan = scene.shotPlan || generateProductionShotPlan(
-                    scene,
-                    scene.sceneMode,
-                    activeScript.aspectRatio === '9:16' ? '9:16' : '16:9'
-                  );
-
-                  return (
-                    <div
-                      key={scene.sceneNumber}
-                      className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all space-y-4"
-                    >
-                      {/* Scene Header */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="w-7 h-7 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 font-mono text-xs font-bold flex items-center justify-center">
-                            #{scene.sceneNumber}
-                          </span>
-                          <span className="text-xs font-bold text-white">
-                            Scene {scene.sceneNumber}
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-300 border border-cyan-500/30">
-                            ⏱ {scene.audioTiming?.timecode || `${formatTimecode(0)} - ${formatTimecode(scene.durationSec)}`} ({scene.audioTiming?.durationSec || scene.durationSec}s)
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
-                            🎬 {currentShotPlan.shotType}
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-300 border border-purple-500/20">
-                            🎥 {currentShotPlan.movement}
-                          </span>
-                          {(scene.sceneMode || scene.primaryMode || activeScript.primaryMode) && (
-                            <StoryModeBadge
-                              mode={(scene.sceneMode || scene.primaryMode || activeScript.primaryMode) as any}
-                              size="sm"
-                            />
-                          )}
-                        </div>
-
-                        {/* Scene Actions */}
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {/* Real Voiceover Playback / Synthesis */}
-                          <button
-                            onClick={() => handlePlaySceneAudio(scene)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-colors ${
-                              isPlaying
-                                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                            }`}
-                          >
-                            {isPlaying ? (
-                              <>
-                                <Square className="w-3.5 h-3.5 text-rose-400 fill-current" />
-                                Stop Voice
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
-                                Play Voiceover
-                              </>
-                            )}
-                          </button>
-
-                          {/* Toggle Shot Plan Studio */}
-                          <button
-                            onClick={() => setExpandedShotPlanScene(isExpandedShotPlan ? null : scene.sceneNumber)}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-colors ${
-                              isExpandedShotPlan
-                                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                                : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                            }`}
-                          >
-                            <Camera className="w-3.5 h-3.5 text-cyan-400" />
-                            <span>Shot Plan</span>
-                          </button>
-
-                          {/* Generate Image */}
-                          <button
-                            onClick={() => generateSceneImage(activeScript.id, scene.sceneNumber)}
-                            disabled={isGenerating}
-                            className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                          >
-                            <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-                            <span>Gen Visual</span>
-                          </button>
-
-                          {/* Generate Video Clip */}
-                          <button
-                            onClick={() => generateSceneVideo(activeScript.id, scene.sceneNumber)}
-                            disabled={isGenerating}
-                            className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                          >
-                            <Video className="w-3.5 h-3.5 text-indigo-400" />
-                            <span>Clip Asset</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Scene 2-Column Content: Script on Left, Visual Directives on Right */}
-                      <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-                        {/* Spoken Voiceover */}
-                        <div className="md:col-span-7 space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-mono font-bold uppercase text-cyan-400 flex items-center gap-1">
-                              <Volume2 className="w-3 h-3" />
-                              Spoken Voiceover:
-                            </span>
-                            <span className="text-[10px] font-mono text-slate-400">
-                              {(scene.voiceover || '').trim().split(/\s+/).filter(Boolean).length} words · ~{scene.audioTiming?.durationSec || scene.durationSec}s
-                            </span>
-                          </div>
-                          <textarea
-                            rows={3}
-                            value={scene.voiceover}
-                            onChange={(e) =>
-                              updateScene(activeScript.id, scene.sceneNumber, {
-                                voiceover: e.target.value,
-                              })
-                            }
-                            className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 leading-relaxed resize-none"
-                          />
-
-                          {/* On-screen text & SFX */}
-                          <div className="flex flex-wrap gap-2 text-[11px] pt-1">
-                            {scene.onScreenText && (
-                              <span className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 text-slate-300 font-mono">
-                                <strong className="text-cyan-400">On-Screen:</strong> "{scene.onScreenText}"
-                              </span>
-                            )}
-                            {scene.sfx && (
-                              <span className="px-2.5 py-1 rounded bg-slate-950 border border-slate-800 text-slate-400 font-mono">
-                                🎵 {scene.sfx}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Visual & B-Roll Art Direction */}
-                        <div className="md:col-span-5 space-y-2">
-                          {scene.generatedImage ? (
-                            <div className="rounded-xl overflow-hidden border border-slate-800 aspect-video relative group">
-                              <img
-                                src={scene.generatedImage}
-                                alt={`Scene ${scene.sceneNumber} visual`}
-                                referrerPolicy="no-referrer"
-                                className="w-full h-full object-cover"
-                              />
-                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity p-2 flex flex-col justify-end text-[10px] text-white">
-                                <p className="line-clamp-2">{scene.visualDescription}</p>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-1.5">
-                              <span className="text-[10px] font-mono font-bold uppercase text-indigo-400 flex items-center gap-1">
-                                <ImageIcon className="w-3 h-3" />
-                                Art Direction:
-                              </span>
-                              <p className="text-xs text-slate-300 leading-relaxed">
-                                {scene.visualDescription}
-                              </p>
-                            </div>
-                          )}
-
-                          {scene.bRollSuggestion && (
-                            <div className="p-2.5 rounded-lg bg-slate-950/40 border border-slate-800 text-[11px] text-slate-400">
-                              <span className="text-amber-400 font-semibold">B-Roll: </span>
-                              {scene.bRollSuggestion}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Expanded Shot Plan Studio Drawer */}
-                      {isExpandedShotPlan && (
-                        <div className="p-4 rounded-xl bg-slate-950 border border-cyan-500/30 space-y-3">
-                          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                            <div className="flex items-center gap-2">
-                              <Film className="w-4 h-4 text-cyan-400" />
-                              <span className="text-xs font-bold text-white font-display">
-                                Shot Plan Studio — Scene #{scene.sceneNumber}
-                              </span>
-                            </div>
-                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
-                              Framing: {currentShotPlan.framing}
-                            </span>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                            {/* Shot Type Selector */}
-                            <div>
-                              <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                                Camera Shot Type
-                              </label>
-                              <select
-                                value={currentShotPlan.shotType}
-                                onChange={(e) =>
-                                  updateSceneShotPlan(activeScript.id, scene.sceneNumber, {
-                                    shotType: e.target.value as CameraShotType,
-                                  })
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-                              >
-                                {[
-                                  'Extreme Wide Shot',
-                                  'Wide Shot',
-                                  'Medium Shot',
-                                  'Close-Up',
-                                  'Extreme Close-Up',
-                                  'Drone Aerial',
-                                  'Over-the-Shoulder',
-                                  'POV',
-                                  'Dutch Angle',
-                                ].map((type) => (
-                                  <option key={type} value={type}>
-                                    {type}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-
-                            {/* Camera Movement Selector */}
-                            <div>
-                              <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                                Camera Movement
-                              </label>
-                              <select
-                                value={currentShotPlan.movement}
-                                onChange={(e) =>
-                                  updateSceneShotPlan(activeScript.id, scene.sceneNumber, {
-                                    movement: e.target.value as CameraMovement,
-                                  })
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-                              >
-                                {[
-                                  'Slow Push-In / Dolly',
-                                  'Pan Left/Right',
-                                  'Tilt Up/Down',
-                                  'Tracking / Gimbal',
-                                  'Handheld Organic',
-                                  'Static',
-                                  'Pull-Out',
-                                ].map((mov) => (
-                                  <option key={mov} value={mov}>
-                                    {mov}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-
-                            {/* Lighting Mood */}
-                            <div>
-                              <label className="block text-[11px] font-mono uppercase text-slate-400 mb-1">
-                                Lighting Mood
-                              </label>
-                              <input
-                                type="text"
-                                value={currentShotPlan.lightingMood || ''}
-                                onChange={(e) =>
-                                  updateSceneShotPlan(activeScript.id, scene.sceneNumber, {
-                                    lightingMood: e.target.value,
-                                  })
-                                }
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
-                                placeholder="Atmospheric lighting, volumetric rays..."
-                              />
-                            </div>
-                          </div>
-
-                          {/* Visual Prompt for AI Generation */}
-                          <div className="space-y-1.5 pt-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-mono uppercase text-cyan-400 font-bold">
-                                Generated Cinematic Visual Prompt (for Midjourney / Flux / Runway / Sora):
-                              </span>
-                              <button
-                                onClick={() => handleCopy(currentShotPlan.visualPrompt, `shot_prompt_${scene.sceneNumber}`)}
-                                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono flex items-center gap-1 transition-colors"
-                              >
-                                {copiedKey === `shot_prompt_${scene.sceneNumber}` ? (
-                                  <>
-                                    <Check className="w-3 h-3 text-emerald-400" />
-                                    <span>Copied!</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Copy className="w-3 h-3 text-cyan-400" />
-                                    <span>Copy Prompt</span>
-                                  </>
-                                )}
-                              </button>
-                            </div>
-                            <textarea
-                              rows={2}
-                              value={currentShotPlan.visualPrompt}
-                              onChange={(e) =>
-                                updateSceneShotPlan(activeScript.id, scene.sceneNumber, {
-                                  visualPrompt: e.target.value,
-                                })
-                              }
-                              className="w-full p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 leading-relaxed resize-none"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              <MediaAssetLibrary
+                scriptId={activeScript.id}
+                projectId={activeScript.projectId}
+              />
             </div>
           )}
 

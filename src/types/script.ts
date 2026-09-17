@@ -1,5 +1,21 @@
 import type { PlatformOption, LanguageOption, ToneOption } from './idea';
 import type { StoryMode } from './storyMode';
+import type {
+  MediaAsset,
+  MediaAssetType,
+  MediaAssetStatus,
+  MediaAssetSource,
+  MediaAssetFilter,
+} from './mediaAsset';
+
+export type {
+  StoryMode,
+  MediaAsset,
+  MediaAssetType,
+  MediaAssetStatus,
+  MediaAssetSource,
+  MediaAssetFilter,
+};
 
 export type ScriptType =
   | 'YouTube Long-form'
@@ -83,25 +99,35 @@ export interface ScriptSection {
 }
 
 export interface ScriptScene {
+  sceneId?: string;
   sceneNumber: number;
+  title?: string;
   duration: string;
   durationSec?: number;
   voiceover: string;
+  dialogue?: string;
   visualDescription: string;
+  bRoll?: string;
   bRollSuggestion: string;
-  onScreenText: string;
+  shotType?: CameraShotType | string;
+  cameraMovement?: CameraMovement | string;
   cameraDirection: string;
   transition: string;
+  onScreenText: string;
+  music?: string;
   sfxMusic: string;
+  soundEffects?: string;
   sfx?: string;
+  imageGenerationPrompt?: string;
+  videoGenerationPrompt?: string;
   sceneMode?: StoryMode;
   primaryMode?: StoryMode;
   secondaryModes?: StoryMode[];
   shotPlan?: ShotPlan;
   audioTiming?: AudioTimingSync;
   lightingMood?: string;
-  shotType?: string;
   action?: string;
+  mediaAssetIds?: string[];
   generatedImage?: string;
   generatedVideo?: {
     status: 'idle' | 'generating' | 'ready' | 'failed';

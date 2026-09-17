@@ -7,6 +7,8 @@ import type {
 import type {
   Script,
   ScriptSettings,
+  ScriptScene,
+  StoryMode,
   AISectionAction,
   ScriptSEO,
   ThumbnailConcept,
@@ -238,6 +240,50 @@ export async function generateScriptAPI(settings: ScriptSettings): Promise<Parti
   });
 
   return data.script;
+}
+
+export async function generateSceneBreakdownAPI(params: {
+  scriptTitle: string;
+  scriptText?: string;
+  sections?: { id: string; name: string; content: string; order: number }[];
+  primaryMode: StoryMode;
+  secondaryModes?: StoryMode[];
+  platform?: string;
+  duration?: string;
+  audience?: string;
+  tone?: string;
+}): Promise<ScriptScene[]> {
+  const modeProfile = getStoryModeProfile(params.primaryMode);
+  const data = await safeFetchJSON('/api/ai/generate-scene-breakdown', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...params,
+      modeProfile,
+    }),
+  });
+
+  return data.scenes || [];
+}
+
+export async function regenerateSceneAPI(params: {
+  scene: ScriptScene;
+  scriptContext: {
+    title?: string;
+    topic?: string;
+    primaryMode?: StoryMode;
+    secondaryModes?: StoryMode[];
+    platform?: string;
+  };
+  instruction?: string;
+}): Promise<ScriptScene> {
+  const data = await safeFetchJSON('/api/ai/regenerate-scene', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+
+  return data.scene;
 }
 
 export async function rewriteSectionAPI(params: {

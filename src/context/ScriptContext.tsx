@@ -21,13 +21,20 @@ import type {
   CaptionLine,
   CaptionConfig,
   ShotPlan,
+  StoryMode,
+  MediaAsset,
+  MediaAssetType,
+  MediaAssetStatus,
 } from '../types/script';
 import type { Idea } from '../types/idea';
 import { useAuth } from './AuthContext';
 import { useProject } from './ProjectContext';
 import { db, isFirebaseConfigured, handleFirestoreError, OperationType } from '../firebase/config';
+import * as mediaAssetService from '../services/mediaAssetService';
 import {
   generateScriptAPI,
+  generateSceneBreakdownAPI,
+  regenerateSceneAPI,
   rewriteSectionAPI,
   generateSEOAPI,
   generateThumbnailsAPI,
@@ -40,6 +47,10 @@ import {
   calculateAudioTimingForScenes,
   generateProductionShotPlan,
 } from '../services/audioTimingSyncService';
+import {
+  normalizeScene,
+  reindexScenes,
+} from '../services/sceneBreakdownService';
 
 interface ScriptContextType {
   scripts: Script[];
@@ -55,6 +66,23 @@ interface ScriptContextType {
   updateSection: (scriptId: string, sectionId: string, content: string) => Promise<void>;
   updateScene: (scriptId: string, sceneNumber: number, updates: Partial<ScriptScene>) => Promise<void>;
   updateSceneShotPlan: (scriptId: string, sceneNumber: number, updates: Partial<ShotPlan>) => Promise<void>;
+  generateSceneBreakdown: (
+    scriptId: string,
+    options?: { primaryMode?: StoryMode; targetDuration?: string }
+  ) => Promise<ScriptScene[]>;
+  addScene: (
+    scriptId: string,
+    atIndex?: number,
+    initialData?: Partial<ScriptScene>
+  ) => Promise<void>;
+  deleteScene: (scriptId: string, sceneNumber: number) => Promise<void>;
+  reorderScenes: (scriptId: string, fromIndex: number, toIndex: number) => Promise<void>;
+  regenerateScene: (
+    scriptId: string,
+    sceneNumber: number,
+    instruction?: string
+  ) => Promise<void>;
+  saveSceneBreakdown: (scriptId: string, scenes: ScriptScene[]) => Promise<void>;
   syncScriptToAudio: (
     scriptId: string,
     audioDurationSec: number,
@@ -84,6 +112,16 @@ interface ScriptContextType {
   updateCaptions: (scriptId: string, captions: CaptionLine[]) => Promise<void>;
   createVideoFromScript: (scriptId: string) => Promise<{ timelineReady: boolean; totalScenes: number; message: string }>;
   clearError: () => void;
+  // Media Asset Pipeline operations
+  mediaAssets: MediaAsset[];
+  isLoadingAssets: boolean;
+  loadProjectAssets: (projectId?: string) => Promise<MediaAsset[]>;
+  createMediaAsset: (assetData: Partial<MediaAsset>) => Promise<MediaAsset>;
+  updateMediaAsset: (assetId: string, updates: Partial<MediaAsset>) => Promise<MediaAsset>;
+  deleteMediaAsset: (assetId: string) => Promise<boolean>;
+  attachAssetToScene: (assetId: string, sceneNumber: number, scriptId?: string) => Promise<void>;
+  detachAssetFromScene: (assetId: string, sceneNumber: number, scriptId?: string) => Promise<void>;
+  getAssetsForScene: (sceneNumber: number, scriptId?: string) => MediaAsset[];
 }
 
 const ScriptContext = createContext<ScriptContextType | undefined>(undefined);
@@ -102,6 +140,71 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
   const [generationStep, setGenerationStep] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
+
+  // Media Assets Pipeline State
+  const [mediaAssets, setMediaAssets] = useState<MediaAsset[]>([]);
+  const [isLoadingAssets, setIsLoadingAssets] = useState<boolean>(false);
+
+  // Load project media assets
+  const loadProjectAssets = useCallback(
+    async (projectId?: string): Promise<MediaAsset[]> => {
+      setIsLoadingAssets(true);
+      try {
+        const assets = await mediaAssetService.getProjectAssets(
+          projectId || activeProject?.id,
+          user?.id
+        );
+        setMediaAssets(assets);
+        return assets;
+      } catch (err) {
+        console.error('Failed to load media assets:', err);
+        return [];
+      } finally {
+        setIsLoadingAssets(false);
+      }
+    },
+    [activeProject?.id, user?.id]
+  );
+
+  // Sync media assets on auth or project change
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    const isAuth =
+      authState === 'AUTHENTICATED' &&
+      user &&
+      user.accountType !== 'guest' &&
+      !user.id.startsWith('guest_') &&
+      isFirebaseConfigured &&
+      db;
+
+    if (isAuth) {
+      setIsLoadingAssets(true);
+      const assetsColRef = collection(db, 'users', user.id, 'mediaAssets');
+      unsubscribe = onSnapshot(
+        assetsColRef,
+        (snapshot) => {
+          const list: MediaAsset[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            list.push(mediaAssetService.normalizeMediaAsset({ ...data, id: docSnap.id }));
+          });
+          setMediaAssets(list);
+          setIsLoadingAssets(false);
+        },
+        (err) => {
+          console.warn('MediaAssets onSnapshot fallback to local:', err);
+          loadProjectAssets();
+        }
+      );
+    } else {
+      loadProjectAssets();
+    }
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [authState, user, loadProjectAssets]);
 
   // Load from local storage helper
   const loadLocalScripts = useCallback(() => {
@@ -424,6 +527,218 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     });
 
     await updateScript(scriptId, { scenes: updatedScenes });
+  };
+
+  // Generate Full Scene Breakdown from Script using Gemini & Story Mode
+  const generateSceneBreakdown = async (
+    scriptId: string,
+    options?: { primaryMode?: StoryMode; targetDuration?: string }
+  ): Promise<ScriptScene[]> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) throw new Error('Script not found');
+
+    setIsGenerating(true);
+    setError(null);
+    setGenerationStep('Architecting scene breakdown & cinematic shot plans...');
+
+    try {
+      const modeToUse = options?.primaryMode || target.primaryMode || 'Documentary';
+      const targetAspect =
+        target.aspectRatio === '9:16' || target.type?.toLowerCase().includes('short')
+          ? '9:16'
+          : '16:9';
+
+      const rawScenes = await generateSceneBreakdownAPI({
+        scriptTitle: target.title,
+        sections: target.sections,
+        primaryMode: modeToUse,
+        secondaryModes: target.secondaryModes,
+        platform: target.type || target.settings?.platform || 'YouTube',
+        duration: options?.targetDuration || target.settings?.duration,
+        audience: target.settings?.audience,
+        tone: target.settings?.tone,
+      });
+
+      const reindexed = reindexScenes(rawScenes, modeToUse, targetAspect);
+
+      await updateScript(scriptId, {
+        scenes: reindexed,
+        primaryMode: modeToUse,
+      });
+
+      setIsGenerating(false);
+      setGenerationStep('');
+      return reindexed;
+    } catch (err: any) {
+      console.error('Failed to generate scene breakdown:', err);
+      const msg = err.message || 'Scene breakdown generation failed.';
+      setError(msg);
+      setIsGenerating(false);
+      setGenerationStep('');
+      throw err;
+    }
+  };
+
+  // Add Scene
+  const addScene = async (
+    scriptId: string,
+    atIndex?: number,
+    initialData?: Partial<ScriptScene>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const targetAspect =
+      target.aspectRatio === '9:16' || target.type?.toLowerCase().includes('short')
+        ? '9:16'
+        : '16:9';
+    const currentScenes = [...(target.scenes || [])];
+    const insertIdx =
+      typeof atIndex === 'number' && atIndex >= 0 && atIndex <= currentScenes.length
+        ? atIndex
+        : currentScenes.length;
+
+    const newScene = normalizeScene(
+      {
+        title: `Scene ${insertIdx + 1}`,
+        duration: '5s',
+        durationSec: 5,
+        voiceover: '',
+        dialogue: '',
+        visualDescription: 'Establishing cinematic visual...',
+        bRoll: '',
+        shotType: 'Medium Shot',
+        cameraMovement: 'Slow Push-In / Dolly',
+        transition: 'Cut',
+        onScreenText: '',
+        music: '',
+        soundEffects: '',
+        ...initialData,
+      },
+      insertIdx,
+      target.primaryMode,
+      targetAspect
+    );
+
+    currentScenes.splice(insertIdx, 0, newScene);
+    const reindexed = reindexScenes(currentScenes, target.primaryMode, targetAspect);
+
+    await updateScript(scriptId, { scenes: reindexed });
+  };
+
+  // Delete Scene
+  const deleteScene = async (scriptId: string, sceneNumber: number): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const targetAspect =
+      target.aspectRatio === '9:16' || target.type?.toLowerCase().includes('short')
+        ? '9:16'
+        : '16:9';
+    const remaining = (target.scenes || []).filter((s) => s.sceneNumber !== sceneNumber);
+    const reindexed = reindexScenes(remaining, target.primaryMode, targetAspect);
+
+    await updateScript(scriptId, { scenes: reindexed });
+  };
+
+  // Reorder Scenes
+  const reorderScenes = async (
+    scriptId: string,
+    fromIndex: number,
+    toIndex: number
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const targetAspect =
+      target.aspectRatio === '9:16' || target.type?.toLowerCase().includes('short')
+        ? '9:16'
+        : '16:9';
+    const reordered = [...(target.scenes || [])];
+    if (
+      fromIndex < 0 ||
+      fromIndex >= reordered.length ||
+      toIndex < 0 ||
+      toIndex >= reordered.length
+    )
+      return;
+
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    const reindexed = reindexScenes(reordered, target.primaryMode, targetAspect);
+    await updateScript(scriptId, { scenes: reindexed });
+  };
+
+  // Regenerate Single Scene in Context
+  const regenerateScene = async (
+    scriptId: string,
+    sceneNumber: number,
+    instruction?: string
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const sceneToRegen = target.scenes?.find((s) => s.sceneNumber === sceneNumber);
+    if (!sceneToRegen) return;
+
+    setIsGenerating(true);
+    setGenerationStep(`Regenerating Scene #${sceneNumber}...`);
+
+    try {
+      const regenerated = await regenerateSceneAPI({
+        scene: sceneToRegen,
+        scriptContext: {
+          title: target.title,
+          topic: target.settings?.topic,
+          primaryMode: target.primaryMode,
+          secondaryModes: target.secondaryModes,
+          platform: target.type || target.settings?.platform,
+        },
+        instruction,
+      });
+
+      const targetAspect =
+        target.aspectRatio === '9:16' || target.type?.toLowerCase().includes('short')
+          ? '9:16'
+          : '16:9';
+      const normalizedRegen = normalizeScene(
+        regenerated,
+        sceneNumber - 1,
+        target.primaryMode,
+        targetAspect
+      );
+
+      const updatedScenes = target.scenes.map((s) =>
+        s.sceneNumber === sceneNumber ? normalizedRegen : s
+      );
+
+      await updateScript(scriptId, { scenes: updatedScenes });
+      setIsGenerating(false);
+      setGenerationStep('');
+    } catch (err: any) {
+      console.error('Failed to regenerate scene:', err);
+      setError(err.message || 'Scene regeneration failed.');
+      setIsGenerating(false);
+      setGenerationStep('');
+      throw err;
+    }
+  };
+
+  // Save Scene Breakdown
+  const saveSceneBreakdown = async (
+    scriptId: string,
+    scenes: ScriptScene[]
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const targetAspect =
+      target.aspectRatio === '9:16' || target.type?.toLowerCase().includes('short')
+        ? '9:16'
+        : '16:9';
+    const reindexed = reindexScenes(scenes, target.primaryMode, targetAspect);
+    await updateScript(scriptId, { scenes: reindexed });
   };
 
   // Synchronize script scenes to uploaded audio file duration
@@ -895,6 +1210,168 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
+  // Create Media Asset
+  const createMediaAsset = async (assetData: Partial<MediaAsset>): Promise<MediaAsset> => {
+    try {
+      const created = await mediaAssetService.createAsset(
+        {
+          ...assetData,
+          projectId: assetData.projectId || activeProject?.id,
+          scriptId: assetData.scriptId || activeScript?.id,
+        },
+        user?.id
+      );
+
+      setMediaAssets((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
+
+      // If created with a sceneNumber and we have an activeScript, attach it
+      if (created.sceneNumber && activeScript) {
+        const targetScript = activeScript;
+        if (targetScript.scenes) {
+          const updatedScenes = targetScript.scenes.map((sc) => {
+            if (sc.sceneNumber === created.sceneNumber) {
+              const existingIds = sc.mediaAssetIds || [];
+              if (!existingIds.includes(created.id)) {
+                return { ...sc, mediaAssetIds: [...existingIds, created.id] };
+              }
+            }
+            return sc;
+          });
+          await updateScript(targetScript.id, { scenes: updatedScenes });
+        }
+      }
+
+      return created;
+    } catch (err: any) {
+      console.error('Failed to create media asset:', err);
+      throw err;
+    }
+  };
+
+  // Update Media Asset
+  const updateMediaAsset = async (
+    assetId: string,
+    updates: Partial<MediaAsset>
+  ): Promise<MediaAsset> => {
+    try {
+      const updated = await mediaAssetService.updateAsset(assetId, updates, user?.id);
+      setMediaAssets((prev) =>
+        prev.map((a) => (a.id === assetId || a.assetId === assetId ? updated : a))
+      );
+      return updated;
+    } catch (err: any) {
+      console.error('Failed to update media asset:', err);
+      throw err;
+    }
+  };
+
+  // Delete Media Asset
+  const deleteMediaAsset = async (assetId: string): Promise<boolean> => {
+    try {
+      await mediaAssetService.deleteAsset(assetId, user?.id);
+      setMediaAssets((prev) => prev.filter((a) => a.id !== assetId && a.assetId !== assetId));
+
+      // Remove from any active script scenes
+      if (activeScript && activeScript.scenes) {
+        const hasAsset = activeScript.scenes.some((sc) => sc.mediaAssetIds?.includes(assetId));
+        if (hasAsset) {
+          const updatedScenes = activeScript.scenes.map((sc) => ({
+            ...sc,
+            mediaAssetIds: (sc.mediaAssetIds || []).filter((id) => id !== assetId),
+          }));
+          await updateScript(activeScript.id, { scenes: updatedScenes });
+        }
+      }
+
+      return true;
+    } catch (err: any) {
+      console.error('Failed to delete media asset:', err);
+      return false;
+    }
+  };
+
+  // Attach Asset To Scene
+  const attachAssetToScene = async (
+    assetId: string,
+    sceneNumber: number,
+    scriptId?: string
+  ): Promise<void> => {
+    const targetScriptId = scriptId || activeScript?.id;
+    if (!targetScriptId) return;
+
+    await mediaAssetService.attachAssetToScene(assetId, sceneNumber, targetScriptId, user?.id);
+
+    // Update in-memory asset list
+    setMediaAssets((prev) =>
+      prev.map((a) =>
+        a.id === assetId || a.assetId === assetId
+          ? { ...a, sceneNumber, scriptId: targetScriptId }
+          : a
+      )
+    );
+
+    // Update script scenes
+    const targetScript = scripts.find((s) => s.id === targetScriptId) || activeScript;
+    if (targetScript && targetScript.scenes) {
+      const updatedScenes = targetScript.scenes.map((sc) => {
+        if (sc.sceneNumber === sceneNumber) {
+          const existingIds = sc.mediaAssetIds || [];
+          if (!existingIds.includes(assetId)) {
+            return { ...sc, mediaAssetIds: [...existingIds, assetId] };
+          }
+        }
+        return sc;
+      });
+      await updateScript(targetScriptId, { scenes: updatedScenes });
+    }
+  };
+
+  // Detach Asset From Scene
+  const detachAssetFromScene = async (
+    assetId: string,
+    sceneNumber: number,
+    scriptId?: string
+  ): Promise<void> => {
+    const targetScriptId = scriptId || activeScript?.id;
+    if (!targetScriptId) return;
+
+    await mediaAssetService.detachAssetFromScene(assetId, sceneNumber, targetScriptId, user?.id);
+
+    setMediaAssets((prev) =>
+      prev.map((a) =>
+        a.id === assetId || a.assetId === assetId
+          ? { ...a, sceneNumber: undefined, sceneId: undefined }
+          : a
+      )
+    );
+
+    const targetScript = scripts.find((s) => s.id === targetScriptId) || activeScript;
+    if (targetScript && targetScript.scenes) {
+      const updatedScenes = targetScript.scenes.map((sc) => {
+        if (sc.sceneNumber === sceneNumber && sc.mediaAssetIds) {
+          return {
+            ...sc,
+            mediaAssetIds: sc.mediaAssetIds.filter((id) => id !== assetId),
+          };
+        }
+        return sc;
+      });
+      await updateScript(targetScriptId, { scenes: updatedScenes });
+    }
+  };
+
+  // Get Assets For Scene
+  const getAssetsForScene = useCallback(
+    (sceneNumber: number, scriptId?: string): MediaAsset[] => {
+      const targetScriptId = scriptId || activeScript?.id;
+      return mediaAssets.filter((a) => {
+        const matchesScene = a.sceneNumber === sceneNumber;
+        return targetScriptId ? matchesScene && (!a.scriptId || a.scriptId === targetScriptId) : matchesScene;
+      });
+    },
+    [mediaAssets, activeScript?.id]
+  );
+
   // Filter scripts for active project
   const projectScripts = activeProject
     ? scripts.filter((s) => !s.projectId || s.projectId === activeProject.id)
@@ -916,6 +1393,12 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         updateSection,
         updateScene,
         updateSceneShotPlan,
+        generateSceneBreakdown,
+        addScene,
+        deleteScene,
+        reorderScenes,
+        regenerateScene,
+        saveSceneBreakdown,
         syncScriptToAudio,
         deleteScript,
         saveScript,
@@ -936,6 +1419,16 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         updateCaptions,
         createVideoFromScript,
         clearError: () => setError(null),
+        // Media Asset Pipeline
+        mediaAssets,
+        isLoadingAssets,
+        loadProjectAssets,
+        createMediaAsset,
+        updateMediaAsset,
+        deleteMediaAsset,
+        attachAssetToScene,
+        detachAssetFromScene,
+        getAssetsForScene,
       }}
     >
       {children}

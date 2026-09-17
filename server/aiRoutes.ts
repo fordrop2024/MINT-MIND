@@ -947,6 +947,356 @@ You MUST return a strictly valid JSON object matching this structure:
   }
 });
 
+// 5.5 Generate Full Scene Breakdown & Shot Planning from Script
+aiRouter.post('/generate-scene-breakdown', async (req: Request, res: Response) => {
+  try {
+    const {
+      scriptTitle = 'Untitled Production',
+      scriptText = '',
+      sections = [],
+      primaryMode = 'Documentary',
+      secondaryModes = [],
+      platform = 'YouTube Long-form',
+      duration = '',
+      audience = 'General Creators',
+      tone = 'Cinematic',
+      modeProfile,
+    } = req.body;
+
+    // Build the script content to break down
+    let fullScriptContent = scriptText;
+    if (!fullScriptContent && Array.isArray(sections) && sections.length > 0) {
+      fullScriptContent = sections
+        .map((sec: any) => `[${sec.name || 'Section'}]:\n${sec.content || sec.narration || ''}`)
+        .join('\n\n');
+    }
+
+    if (!fullScriptContent.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Script text or sections are required to generate a scene breakdown.',
+        code: 'BAD_REQUEST',
+      });
+    }
+
+    const isShortForm =
+      platform.includes('Short') || platform.includes('Reel') || platform.includes('Story');
+    const aspectParam = isShortForm ? '--ar 9:16' : '--ar 16:9';
+    const framing = isShortForm ? '9:16 Vertical' : '16:9 Widescreen';
+
+    const prompt = `You are MintMind AI's Executive Film Director and Visual Cinematographer.
+Transform the following complete video script into an elite, shot-by-shot production scene breakdown.
+
+SCRIPT TITLE: "${scriptTitle}"
+PLATFORM: ${platform} (${isShortForm ? 'Vertical 9:16 Fast Retention' : 'Horizontal 16:9 Cinematic'})
+TARGET AUDIENCE: ${audience}
+TONE: ${tone}
+${duration ? `ESTIMATED RUNTIME: ${duration}` : ''}
+
+=== ADAPTIVE STORY MODE DIRECTIVES ===
+Primary Story Mode: ${primaryMode}
+${secondaryModes && secondaryModes.length ? `Secondary Creative Accents: ${secondaryModes.join(', ')}` : ''}
+${modeProfile?.narrativeStructure ? `Narrative Structure Guide: ${modeProfile.narrativeStructure}` : ''}
+${modeProfile?.pacing ? `Pacing Signature: ${modeProfile.pacing}` : ''}
+${modeProfile?.visualStyle ? `Visual Aesthetic Directive: ${modeProfile.visualStyle}` : ''}
+${modeProfile?.cameraStyle ? `Camera Language: ${modeProfile.cameraStyle}` : ''}
+${modeProfile?.lightingStyle ? `Lighting Atmosphere: ${modeProfile.lightingStyle}` : ''}
+${modeProfile?.musicDirection ? `Music Direction: ${modeProfile.musicDirection}` : ''}
+${modeProfile?.soundDirection ? `Sound Design / SFX: ${modeProfile.soundDirection}` : ''}
+${modeProfile?.transitionStyle ? `Transitions: ${modeProfile.transitionStyle}` : ''}
+
+=== COMPLETE SCRIPT TEXT TO BREAK DOWN ===
+${fullScriptContent}
+
+=== DIRECTIVES FOR PRODUCTION BREAKDOWN ===
+1. Break down the ENTIRE script chronologically into discrete, purposeful production scenes.
+2. For each scene, determine the exact spoken dialogue/voiceover line corresponding to that moment.
+3. Every scene MUST have:
+   - sceneNumber: Sequential integer (1, 2, 3...)
+   - title: A concise 2-4 word descriptive scene title (e.g. "Hook: The Revelation", "B-Roll: Microchip Macro")
+   - duration: String like "4s", "6s", or "8s" matching the spoken dialogue length
+   - durationSec: Integer seconds matching duration
+   - voiceover: The exact spoken spoken dialogue for this scene
+   - dialogue: Duplicate of voiceover for actor/voiceover synchronization
+   - visualDescription: Vivid, highly detailed cinematic visual description (subjects, action, background, lighting)
+   - bRoll: Specific, practical B-roll footage suggestion to intercut
+   - shotType: One of: "Extreme Wide Shot", "Wide Shot", "Medium Shot", "Medium Close-Up", "Close-Up", "Extreme Close-Up", "Over-the-Shoulder", "POV", "Drone Aerial", "Dutch Angle", "Macro"
+   - cameraMovement: One of: "Static", "Pan Left/Right", "Tilt Up/Down", "Slow Push-In / Dolly", "Pull-Out", "Tracking / Gimbal", "Handheld Organic", "Whip Pan", "Orbit"
+   - transition: Cinematic cut/transition (e.g. "Cut", "Match Cut", "Whip Pan", "Cross Dissolve", "J-Cut", "Flash")
+   - onScreenText: High-impact punchy words/typography overlay (or empty if none needed)
+   - music: Ambient or musical cue description matching ${primaryMode}
+   - soundEffects: Specific foley / sound effect (SFX) cue (e.g. "Whoosh risers", "Heartbeat thump", "Keyboard clack")
+   - imageGenerationPrompt: A complete, photorealistic prompt for Midjourney/Flux (shot type, subject, camera motion, lighting, color grading, photorealistic, 8k, ${aspectParam})
+   - videoGenerationPrompt: A complete prompt for Runway/Sora/Kling (motion direction, physics, camera movement, speed, cinematic atmospheric quality)
+
+Return a strictly valid JSON object with the array of scenes:
+{
+  "scenes": [
+    {
+      "sceneNumber": 1,
+      "title": "Scene Title",
+      "duration": "5s",
+      "durationSec": 5,
+      "voiceover": "First spoken line...",
+      "dialogue": "First spoken line...",
+      "visualDescription": "Detailed visual...",
+      "bRoll": "B-roll suggestion...",
+      "shotType": "Wide Shot",
+      "cameraMovement": "Slow Push-In / Dolly",
+      "transition": "Cut",
+      "onScreenText": "HOOK KEYWORDS",
+      "music": "Driving low bass drone",
+      "soundEffects": "Deep sub-bass impact",
+      "imageGenerationPrompt": "Cinematic wide shot... photorealistic, 8k ${aspectParam}",
+      "videoGenerationPrompt": "Camera slowly pushes in on... smooth 24fps cinematic motion"
+    }
+  ]
+}`;
+
+    const raw = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
+      prompt,
+    });
+
+    const rawScenes = Array.isArray(raw?.scenes) ? raw.scenes : Array.isArray(raw) ? raw : [];
+
+    if (rawScenes.length === 0) {
+      throw new GeminiServiceError(
+        'AI did not return any scenes in the breakdown. Please try again.',
+        502,
+        'EMPTY_SCENE_BREAKDOWN'
+      );
+    }
+
+    let runningSec = 0;
+    const validatedScenes = rawScenes.map((sc: any, idx: number) => {
+      const durSec =
+        typeof sc.durationSec === 'number' && sc.durationSec > 0
+          ? sc.durationSec
+          : typeof sc.duration === 'number' && sc.duration > 0
+          ? sc.duration
+          : parseInt(String(sc.duration || '5'), 10) || 5;
+
+      const startSec = runningSec;
+      const endSec = runningSec + durSec;
+      runningSec = endSec;
+
+      const pad = (n: number) => Math.floor(n).toString().padStart(2, '0');
+      const formatTime = (s: number) => `${pad(s / 60)}:${pad(s % 60)}`;
+      const timecode = `${formatTime(startSec)} - ${formatTime(endSec)}`;
+
+      const voiceText = (sc.voiceover || sc.dialogue || sc.spokenDialogue || '').trim();
+      const words = voiceText.split(/\s+/).filter(Boolean);
+      const wordCount = words.length;
+
+      const shotType = sc.shotType || sc.cameraDirection || (idx === 0 ? 'Wide Shot' : 'Medium Shot');
+      const cameraMovement = sc.cameraMovement || (idx % 2 === 0 ? 'Slow Push-In / Dolly' : 'Pan Left/Right');
+      const transition = sc.transition || 'Cut';
+      const bRoll = sc.bRoll || sc.bRollSuggestion || '';
+      const music = sc.music || sc.sfxMusic || '';
+      const soundEffects = sc.soundEffects || sc.sfx || '';
+      const visualDesc = sc.visualDescription || sc.action || '';
+
+      const imagePrompt =
+        sc.imageGenerationPrompt ||
+        `Cinematic ${shotType.toLowerCase()}, ${cameraMovement.toLowerCase()} motion. ${visualDesc}. Volumetric atmospheric lighting, photorealistic, 8k resolution, ARRI Alexa 35, anamorphic lens flare. ${aspectParam}`;
+
+      const videoPrompt =
+        sc.videoGenerationPrompt ||
+        `Camera movement: ${cameraMovement.toLowerCase()}. ${visualDesc}. Cinematic motion, continuous 24fps, high fidelity.`;
+
+      const shotPlan = {
+        shotType,
+        movement: cameraMovement,
+        framing,
+        lightingMood: sc.lightingMood || modeProfile?.lightingStyle || 'Atmospheric cinematic lighting',
+        colorGrade: `${primaryMode} calibrated color palette`,
+        focalPoint: bRoll || visualDesc.slice(0, 70) || 'Center subject',
+        visualPrompt: imagePrompt,
+        cinematicNotes: `Transition: ${transition}. Music: ${music}. SFX: ${soundEffects}`,
+      };
+
+      const audioTiming = {
+        startSec,
+        endSec,
+        durationSec: durSec,
+        timecode,
+        wordCount,
+        speechRateWPM: Math.round((wordCount / (durSec || 5)) * 60) || 145,
+        isSyncedToAudioFile: false,
+      };
+
+      return {
+        sceneId: sc.sceneId || `scene_${Date.now()}_${idx + 1}`,
+        sceneNumber: idx + 1,
+        title: sc.title || `Scene ${idx + 1}`,
+        duration: `${durSec}s`,
+        durationSec: durSec,
+        voiceover: voiceText,
+        dialogue: voiceText,
+        visualDescription: visualDesc,
+        bRoll,
+        bRollSuggestion: bRoll,
+        shotType,
+        cameraMovement,
+        cameraDirection: shotType,
+        transition,
+        onScreenText: sc.onScreenText || '',
+        music,
+        sfxMusic: music,
+        soundEffects,
+        sfx: soundEffects,
+        imageGenerationPrompt: imagePrompt,
+        videoGenerationPrompt: videoPrompt,
+        sceneMode: primaryMode,
+        primaryMode,
+        secondaryModes,
+        shotPlan,
+        audioTiming,
+      };
+    });
+
+    res.json({
+      success: true,
+      scenes: validatedScenes,
+      totalScenes: validatedScenes.length,
+      totalDurationSec: runningSec,
+    });
+  } catch (err: any) {
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
+      success: false,
+      error: errorObj.message,
+      code: errorObj.code,
+    });
+  }
+});
+
+// 5.6 Regenerate a Single Scene in Context
+aiRouter.post('/regenerate-scene', async (req: Request, res: Response) => {
+  try {
+    const {
+      scene,
+      scriptContext = {},
+      instruction = '',
+    } = req.body;
+
+    if (!scene || typeof scene.sceneNumber !== 'number') {
+      return res.status(400).json({
+        success: false,
+        error: 'Scene object with sceneNumber is required.',
+        code: 'BAD_REQUEST',
+      });
+    }
+
+    const primaryMode = scriptContext.primaryMode || scene.primaryMode || 'Documentary';
+    const isShortForm = String(scriptContext.platform || '').toLowerCase().includes('short');
+    const aspectParam = isShortForm ? '--ar 9:16' : '--ar 16:9';
+
+    const prompt = `You are MintMind AI's Master Visual Director.
+Regenerate and elevate Scene #${scene.sceneNumber} for the project: "${scriptContext.title || 'Video Script'}".
+
+CURRENT SCENE DATA:
+- Title: ${scene.title || `Scene ${scene.sceneNumber}`}
+- Current Spoken Voiceover: "${scene.voiceover || scene.dialogue || ''}"
+- Current Visual Description: "${scene.visualDescription || ''}"
+- Current Shot Type: ${scene.shotType || 'Medium Shot'}
+- Current Camera Movement: ${scene.cameraMovement || 'Slow Push-In'}
+- Current B-Roll: "${scene.bRoll || scene.bRollSuggestion || ''}"
+- Current Transition: ${scene.transition || 'Cut'}
+- Story Mode Tone: ${primaryMode}
+
+SPECIFIC REGENERATION INSTRUCTION:
+${instruction ? `"${instruction}"` : 'Elevate the visual dynamism, cinematic lighting, and precision shot direction while preserving the narrative alignment.'}
+
+Return a strictly valid JSON object matching:
+{
+  "title": "Sharper 2-4 word scene title",
+  "duration": "${scene.duration || '5s'}",
+  "durationSec": ${scene.durationSec || 5},
+  "voiceover": "Spoken dialogue line...",
+  "dialogue": "Spoken dialogue line...",
+  "visualDescription": "High-impact visual art direction...",
+  "bRoll": "Fresh B-roll suggestion...",
+  "shotType": "Extreme Wide Shot | Wide Shot | Medium Shot | Medium Close-Up | Close-Up | Extreme Close-Up | POV | Drone Aerial | Dutch Angle",
+  "cameraMovement": "Static | Pan Left/Right | Tilt Up/Down | Slow Push-In / Dolly | Pull-Out | Tracking / Gimbal | Handheld Organic | Orbit",
+  "transition": "Cut | Match Cut | Whip Pan | Cross Dissolve",
+  "onScreenText": "On-screen text",
+  "music": "Music suggestion",
+  "soundEffects": "SFX suggestion",
+  "imageGenerationPrompt": "Photorealistic Midjourney prompt with ${aspectParam}",
+  "videoGenerationPrompt": "Video prompt with camera motion and physics"
+}`;
+
+    const raw = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
+      prompt,
+    });
+
+    const durSec =
+      typeof raw.durationSec === 'number' && raw.durationSec > 0
+        ? raw.durationSec
+        : scene.durationSec || 5;
+
+    const shotType = raw.shotType || scene.shotType || 'Medium Shot';
+    const cameraMovement = raw.cameraMovement || scene.cameraMovement || 'Slow Push-In / Dolly';
+    const transition = raw.transition || scene.transition || 'Cut';
+    const bRoll = raw.bRoll || raw.bRollSuggestion || scene.bRoll || '';
+    const music = raw.music || raw.sfxMusic || scene.music || '';
+    const soundEffects = raw.soundEffects || raw.sfx || scene.soundEffects || '';
+    const visualDesc = raw.visualDescription || scene.visualDescription || '';
+    const voiceText = raw.voiceover || raw.dialogue || scene.voiceover || '';
+
+    const imagePrompt =
+      raw.imageGenerationPrompt ||
+      `Cinematic ${shotType.toLowerCase()}, ${cameraMovement.toLowerCase()} motion. ${visualDesc}. Volumetric lighting, 8k photorealistic, ARRI Alexa 35. ${aspectParam}`;
+
+    const videoPrompt =
+      raw.videoGenerationPrompt ||
+      `Camera movement: ${cameraMovement.toLowerCase()}. ${visualDesc}. Cinematic motion, continuous 24fps.`;
+
+    const updatedScene = {
+      ...scene,
+      title: raw.title || scene.title || `Scene ${scene.sceneNumber}`,
+      duration: `${durSec}s`,
+      durationSec: durSec,
+      voiceover: voiceText,
+      dialogue: voiceText,
+      visualDescription: visualDesc,
+      bRoll,
+      bRollSuggestion: bRoll,
+      shotType,
+      cameraMovement,
+      cameraDirection: shotType,
+      transition,
+      onScreenText: raw.onScreenText ?? scene.onScreenText ?? '',
+      music,
+      sfxMusic: music,
+      soundEffects,
+      sfx: soundEffects,
+      imageGenerationPrompt: imagePrompt,
+      videoGenerationPrompt: videoPrompt,
+      shotPlan: {
+        ...(scene.shotPlan || {}),
+        shotType,
+        movement: cameraMovement,
+        visualPrompt: imagePrompt,
+        cinematicNotes: `Transition: ${transition}. SFX: ${soundEffects}`,
+      },
+    };
+
+    res.json({
+      success: true,
+      scene: updatedScene,
+    });
+  } catch (err: any) {
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
+      success: false,
+      error: errorObj.message,
+      code: errorObj.code,
+    });
+  }
+});
+
 // 6. Rewrite Specific Section Only
 aiRouter.post('/rewrite-section', async (req: Request, res: Response) => {
   try {

@@ -71,6 +71,14 @@ service cloud.firestore {
         allow delete: if isOwner(userId);
       }
 
+      // Subcollection: Media Assets
+      match /mediaAssets/{assetId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+                              && isValidId(assetId);
+        allow delete: if isOwner(userId);
+      }
+
       // Subcollection: Competitors
       match /competitors/{competitorId} {
         allow get, list: if isOwner(userId);
