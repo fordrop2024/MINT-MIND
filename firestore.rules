@@ -79,6 +79,14 @@ service cloud.firestore {
         allow delete: if isOwner(userId);
       }
 
+      // Subcollection: Media Generation Jobs
+      match /generationJobs/{jobId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+                              && isValidId(jobId);
+        allow delete: if isOwner(userId);
+      }
+
       // Subcollection: Competitors
       match /competitors/{competitorId} {
         allow get, list: if isOwner(userId);

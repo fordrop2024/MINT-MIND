@@ -16,9 +16,11 @@ import {
 } from 'lucide-react';
 import { useRouter } from '../../context/RouterContext';
 import { IntelligenceEmptyState } from '../../components/youtube/IntelligenceEmptyState';
+import { YouTubeIntelligenceStudio } from '../../components/youtube/YouTubeIntelligenceStudio';
 
 export function YouTubeIntelligenceDashboardPage() {
   const { navigate } = useRouter();
+  const [viewMode, setViewMode] = React.useState<'studio' | 'matrix'>('studio');
 
   const sections = [
     {
@@ -128,68 +130,102 @@ export function YouTubeIntelligenceDashboardPage() {
         </div>
       </div>
 
-      {/* Grid of 8 Intelligence Sections */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {sections.map((section) => {
-          const Icon = section.icon;
+      {/* Mode Toggle Bar */}
+      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setViewMode('studio')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              viewMode === 'studio'
+                ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            Live Intelligence Studio
+          </button>
+          <button
+            onClick={() => setViewMode('matrix')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              viewMode === 'matrix'
+                ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
+                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            System Modules Radar
+          </button>
+        </div>
 
-          return (
-            <div
-              key={section.id}
-              id={`intelligence-card-${section.id}`}
-              className="p-6 rounded-2xl glass-panel border border-slate-800/80 hover:border-slate-700/80 transition-all space-y-4 flex flex-col justify-between"
-            >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
-                      <Icon className="w-4 h-4" />
+        <span className="text-[11px] font-mono text-slate-500">
+          Mode: {viewMode === 'studio' ? 'Interactive Intelligence Workspace' : 'Modular Radar'}
+        </span>
+      </div>
+
+      {viewMode === 'studio' ? (
+        <YouTubeIntelligenceStudio />
+      ) : (
+        /* Grid of 8 Intelligence Sections */
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {sections.map((section) => {
+            const Icon = section.icon;
+
+            return (
+              <div
+                key={section.id}
+                id={`intelligence-card-${section.id}`}
+                className="p-6 rounded-2xl glass-panel border border-slate-800/80 hover:border-slate-700/80 transition-all space-y-4 flex flex-col justify-between"
+              >
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h2 className="text-sm font-bold text-white font-display">
+                          {section.title}
+                        </h2>
+                        <p className="text-[11px] text-slate-400">
+                          {section.subtitle}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h2 className="text-sm font-bold text-white font-display">
-                        {section.title}
-                      </h2>
-                      <p className="text-[11px] text-slate-400">
-                        {section.subtitle}
-                      </p>
-                    </div>
+
+                    <button
+                      onClick={() => navigate(section.route)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-colors"
+                      title={`Open ${section.title}`}
+                    >
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
                   </div>
 
+                  <div className="pt-2">
+                    <IntelligenceEmptyState
+                      title="No YouTube data connection yet."
+                      description="Data connection not configured yet. This intelligence stream will activate when the official YouTube Data API is connected."
+                      compact={true}
+                      showConnectButton={false}
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs">
+                  <span className="text-[10px] font-mono text-slate-400">
+                    MintMind Analytical Model
+                  </span>
                   <button
                     onClick={() => navigate(section.route)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-colors"
-                    title={`Open ${section.title}`}
+                    className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-colors"
                   >
-                    <ArrowRight className="w-4 h-4" />
+                    <span>Launch Module</span>
+                    <ArrowRight className="w-3 h-3" />
                   </button>
                 </div>
-
-                <div className="pt-2">
-                  <IntelligenceEmptyState
-                    title="No YouTube data connection yet."
-                    description="Data connection not configured yet. This intelligence stream will activate when the official YouTube Data API is connected."
-                    compact={true}
-                    showConnectButton={false}
-                  />
-                </div>
               </div>
-
-              <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs">
-                <span className="text-[10px] font-mono text-slate-400">
-                  MintMind Analytical Model
-                </span>
-                <button
-                  onClick={() => navigate(section.route)}
-                  className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-colors"
-                >
-                  <span>Launch Module</span>
-                  <ArrowRight className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

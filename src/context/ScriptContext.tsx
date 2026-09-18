@@ -25,12 +25,20 @@ import type {
   MediaAsset,
   MediaAssetType,
   MediaAssetStatus,
+  EnhancedMediaPrompts,
+  SceneMediaStatus,
+  VoiceoverSettings,
+  VoiceoverTimelineData,
+  RepurposedShort,
+  FilmStoryBible,
 } from '../types/script';
 import type { Idea } from '../types/idea';
 import { useAuth } from './AuthContext';
 import { useProject } from './ProjectContext';
 import { db, isFirebaseConfigured, handleFirestoreError, OperationType } from '../firebase/config';
 import * as mediaAssetService from '../services/mediaAssetService';
+import { mediaGenerationService } from '../services/mediaGenerationService';
+import type { MediaGenerationJob, CreateGenerationJobParams } from '../types/mediaGenerationJob';
 import {
   generateScriptAPI,
   generateSceneBreakdownAPI,
@@ -50,7 +58,21 @@ import {
 import {
   normalizeScene,
   reindexScenes,
+  generateSceneBreakdownFromScript,
 } from '../services/sceneBreakdownService';
+import {
+  enhanceSceneMediaPrompts,
+  enhanceAllScenesMediaPrompts,
+} from '../services/mediaPromptService';
+import {
+  DEFAULT_VOICEOVER_SETTINGS,
+  syncScenesToVoiceTimeline,
+  generateSRTFromScenes,
+  generateVTTFromScenes,
+  calculateExactSpeechCadence,
+} from '../services/voicePipelineService';
+import { generateSeoWithAI } from '../services/seoService';
+import { generateThumbnailsWithAI } from '../services/thumbnailService';
 
 interface ScriptContextType {
   scripts: Script[];
@@ -66,6 +88,27 @@ interface ScriptContextType {
   updateSection: (scriptId: string, sectionId: string, content: string) => Promise<void>;
   updateScene: (scriptId: string, sceneNumber: number, updates: Partial<ScriptScene>) => Promise<void>;
   updateSceneShotPlan: (scriptId: string, sceneNumber: number, updates: Partial<ShotPlan>) => Promise<void>;
+  updateSceneMediaPrompts: (
+    scriptId: string,
+    sceneNumber: number,
+    prompts: EnhancedMediaPrompts
+  ) => Promise<void>;
+  batchUpdateSceneMediaPrompts: (
+    scriptId: string,
+    scenesWithPrompts: Array<{ sceneNumber: number; prompts: EnhancedMediaPrompts }>
+  ) => Promise<void>;
+  enhanceScenePrompts: (
+    scriptId: string,
+    sceneNumber: number
+  ) => Promise<EnhancedMediaPrompts>;
+  enhanceAllScenePrompts: (
+    scriptId: string
+  ) => Promise<ScriptScene[]>;
+  updateSceneMediaStatus: (
+    scriptId: string,
+    sceneNumber: number,
+    status: SceneMediaStatus
+  ) => Promise<void>;
   generateSceneBreakdown: (
     scriptId: string,
     options?: { primaryMode?: StoryMode; targetDuration?: string }
@@ -88,6 +131,27 @@ interface ScriptContextType {
     audioDurationSec: number,
     audioTrackMeta?: { fileName: string; audioUrl?: string; fileSize?: number }
   ) => Promise<void>;
+  updateVoiceoverSettings: (
+    scriptId: string,
+    settings: Partial<VoiceoverSettings>
+  ) => Promise<void>;
+  syncScriptToVoiceSettings: (
+    scriptId: string,
+    settings?: VoiceoverSettings
+  ) => Promise<{ updatedScenes: ScriptScene[]; timelineData: VoiceoverTimelineData }>;
+  generateSceneVoice: (
+    scriptId: string,
+    sceneNumber: number,
+    voiceSettings?: Partial<VoiceoverSettings>
+  ) => Promise<void>;
+  generateAllScenesVoice: (
+    scriptId: string,
+    voiceSettings?: Partial<VoiceoverSettings>
+  ) => Promise<void>;
+  exportScriptSubtitles: (
+    scriptId: string,
+    format: 'srt' | 'vtt'
+  ) => string;
   deleteScript: (scriptId: string) => Promise<void>;
   saveScript: (script: Script) => Promise<void>;
   setActiveScript: (script: Script | null) => void;
@@ -101,8 +165,17 @@ interface ScriptContextType {
     options?: { targetLanguage?: string }
   ) => Promise<string>;
   generateSEO: (scriptId: string) => Promise<ScriptSEO>;
+  saveScriptSEO: (scriptId: string, seo: ScriptSEO) => Promise<void>;
   generateThumbnails: (scriptId: string) => Promise<ThumbnailConcept[]>;
+  saveScriptThumbnails: (scriptId: string, thumbnails: ThumbnailConcept[]) => Promise<void>;
+  updateThumbnailConcept: (
+    scriptId: string,
+    conceptId: string,
+    updates: Partial<ThumbnailConcept>
+  ) => Promise<void>;
   repurposeScript: (scriptId: string) => Promise<RepurposeVersions>;
+  saveScriptRepurposedShorts: (scriptId: string, shorts: RepurposedShort[]) => Promise<void>;
+  saveFilmStoryBible: (scriptId: string, bible: FilmStoryBible) => Promise<void>;
   generateCompleteContentPackage: (scriptId: string) => Promise<ContentPackage>;
   generateSceneImage: (scriptId: string, sceneNumber: number) => Promise<string>;
   generateSceneVideo: (scriptId: string, sceneNumber: number) => Promise<void>;
@@ -122,6 +195,15 @@ interface ScriptContextType {
   attachAssetToScene: (assetId: string, sceneNumber: number, scriptId?: string) => Promise<void>;
   detachAssetFromScene: (assetId: string, sceneNumber: number, scriptId?: string) => Promise<void>;
   getAssetsForScene: (sceneNumber: number, scriptId?: string) => MediaAsset[];
+  // Media Generation Pipeline operations
+  generationJobs: MediaGenerationJob[];
+  isLoadingJobs: boolean;
+  createGenerationJob: (params: CreateGenerationJobParams) => Promise<MediaGenerationJob>;
+  cancelGenerationJob: (jobId: string) => Promise<void>;
+  retryGenerationJob: (jobId: string) => Promise<void>;
+  deleteGenerationJob: (jobId: string) => Promise<void>;
+  getJobsForScene: (sceneNumber: number, scriptId?: string) => MediaGenerationJob[];
+  getActiveJobsCount: () => number;
 }
 
 const ScriptContext = createContext<ScriptContextType | undefined>(undefined);
@@ -205,6 +287,26 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
       if (unsubscribe) unsubscribe();
     };
   }, [authState, user, loadProjectAssets]);
+
+  // Media Generation Pipeline State
+  const [generationJobs, setGenerationJobs] = useState<MediaGenerationJob[]>([]);
+  const [isLoadingJobs, setIsLoadingJobs] = useState<boolean>(false);
+
+  // Sync generation jobs on auth or user change
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    const effectiveUserId = user?.id || 'guest';
+
+    setIsLoadingJobs(true);
+    unsubscribe = mediaGenerationService.subscribeToJobs(effectiveUserId, (jobs) => {
+      setGenerationJobs(jobs);
+      setIsLoadingJobs(false);
+    });
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [authState, user?.id]);
 
   // Load from local storage helper
   const loadLocalScripts = useCallback(() => {
@@ -529,6 +631,135 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     await updateScript(scriptId, { scenes: updatedScenes });
   };
 
+  // Update media prompts for individual scene
+  const updateSceneMediaPrompts = async (
+    scriptId: string,
+    sceneNumber: number,
+    prompts: EnhancedMediaPrompts
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const updatedScenes = target.scenes.map((sc) => {
+      if (sc.sceneNumber !== sceneNumber) return sc;
+      return {
+        ...sc,
+        enhancedPrompts: prompts,
+        imageGenerationPrompt: prompts.midjourneyPrompt || sc.imageGenerationPrompt,
+        videoGenerationPrompt: prompts.runwayPrompt || sc.videoGenerationPrompt,
+        mediaStatus: 'Prompt Ready' as SceneMediaStatus,
+      };
+    });
+
+    await updateScript(scriptId, { scenes: updatedScenes });
+  };
+
+  // Batch update media prompts for multiple scenes
+  const batchUpdateSceneMediaPrompts = async (
+    scriptId: string,
+    scenesWithPrompts: Array<{ sceneNumber: number; prompts: EnhancedMediaPrompts }>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const promptMap = new Map(scenesWithPrompts.map((item) => [item.sceneNumber, item.prompts]));
+
+    const updatedScenes = target.scenes.map((sc) => {
+      const newPrompts = promptMap.get(sc.sceneNumber);
+      if (!newPrompts) return sc;
+      return {
+        ...sc,
+        enhancedPrompts: newPrompts,
+        imageGenerationPrompt: newPrompts.midjourneyPrompt || sc.imageGenerationPrompt,
+        videoGenerationPrompt: newPrompts.runwayPrompt || sc.videoGenerationPrompt,
+        mediaStatus: 'Prompt Ready' as SceneMediaStatus,
+      };
+    });
+
+    await updateScript(scriptId, { scenes: updatedScenes });
+  };
+
+  // Enhance Prompts for Single Scene via Gemini & MediaPromptService
+  const enhanceScenePrompts = async (
+    scriptId: string,
+    sceneNumber: number
+  ): Promise<EnhancedMediaPrompts> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) throw new Error('Script not found');
+
+    const scene = target.scenes?.find((s) => s.sceneNumber === sceneNumber);
+    if (!scene) throw new Error(`Scene #${sceneNumber} not found`);
+
+    setIsGenerating(true);
+    setGenerationStep(`Enhancing Media Prompts for Scene #${sceneNumber}...`);
+
+    try {
+      const enhanced = await enhanceSceneMediaPrompts(scene, {
+        storyMode: target.primaryMode,
+        aspectRatio: target.aspectRatio === '9:16' ? '9:16' : '16:9',
+        projectContext: {
+          title: target.title,
+          topic: target.settings?.topic,
+          platform: target.type || target.settings?.platform,
+        },
+      });
+
+      await updateSceneMediaPrompts(scriptId, sceneNumber, enhanced);
+      setIsGenerating(false);
+      setGenerationStep('');
+      return enhanced;
+    } catch (err: any) {
+      console.error('Failed to enhance scene prompts:', err);
+      setIsGenerating(false);
+      setGenerationStep('');
+      throw err;
+    }
+  };
+
+  // Enhance Prompts for All Scenes in Sequence
+  const enhanceAllScenePrompts = async (
+    scriptId: string
+  ): Promise<ScriptScene[]> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target || !target.scenes || target.scenes.length === 0) {
+      throw new Error('No scenes available to enhance');
+    }
+
+    setIsGenerating(true);
+    setGenerationStep(`Enhancing AI Prompts for all ${target.scenes.length} scenes...`);
+
+    try {
+      const updated = await enhanceAllScenesMediaPrompts(target.scenes, {
+        storyMode: target.primaryMode,
+        aspectRatio: target.aspectRatio === '9:16' ? '9:16' : '16:9',
+        projectContext: {
+          title: target.title,
+          topic: target.settings?.topic,
+          platform: target.type || target.settings?.platform,
+        },
+      });
+
+      await updateScript(scriptId, { scenes: updated });
+      setIsGenerating(false);
+      setGenerationStep('');
+      return updated;
+    } catch (err: any) {
+      console.error('Failed to enhance all scene prompts:', err);
+      setIsGenerating(false);
+      setGenerationStep('');
+      throw err;
+    }
+  };
+
+  // Update Media Status for Single Scene
+  const updateSceneMediaStatus = async (
+    scriptId: string,
+    sceneNumber: number,
+    status: SceneMediaStatus
+  ): Promise<void> => {
+    await updateScene(scriptId, sceneNumber, { mediaStatus: status });
+  };
+
   // Generate Full Scene Breakdown from Script using Gemini & Story Mode
   const generateSceneBreakdown = async (
     scriptId: string,
@@ -548,18 +779,23 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
           ? '9:16'
           : '16:9';
 
-      const rawScenes = await generateSceneBreakdownAPI({
-        scriptTitle: target.title,
-        sections: target.sections,
-        primaryMode: modeToUse,
-        secondaryModes: target.secondaryModes,
-        platform: target.type || target.settings?.platform || 'YouTube',
-        duration: options?.targetDuration || target.settings?.duration,
-        audience: target.settings?.audience,
-        tone: target.settings?.tone,
-      });
-
-      const reindexed = reindexScenes(rawScenes, modeToUse, targetAspect);
+      const reindexed = await generateSceneBreakdownFromScript(
+        {
+          scriptTitle: target.title,
+          sections: target.sections,
+          primaryMode: modeToUse,
+          secondaryModes: target.secondaryModes,
+          platform: target.type || target.settings?.platform || 'YouTube',
+          duration: options?.targetDuration || target.settings?.duration,
+          audience: target.settings?.audience,
+          tone: target.settings?.tone,
+        },
+        {
+          primaryMode: modeToUse,
+          aspectRatio: targetAspect,
+          targetDuration: options?.targetDuration,
+        }
+      );
 
       await updateScript(scriptId, {
         scenes: reindexed,
@@ -764,6 +1000,139 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
+  // Update Voiceover & TTS Settings
+  const updateVoiceoverSettings = async (
+    scriptId: string,
+    settingsUpdates: Partial<VoiceoverSettings>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const current = target.voiceoverSettings || DEFAULT_VOICEOVER_SETTINGS;
+    const merged: VoiceoverSettings = {
+      ...current,
+      ...settingsUpdates,
+    };
+
+    await updateScript(scriptId, { voiceoverSettings: merged });
+  };
+
+  // Synchronize script scenes to voice settings & cadence
+  const syncScriptToVoiceSettings = async (
+    scriptId: string,
+    settings?: VoiceoverSettings
+  ): Promise<{ updatedScenes: ScriptScene[]; timelineData: VoiceoverTimelineData }> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) throw new Error('Script not found');
+
+    const effectiveSettings = settings || target.voiceoverSettings || DEFAULT_VOICEOVER_SETTINGS;
+    const { updatedScenes, timelineData } = syncScenesToVoiceTimeline(
+      target.scenes,
+      effectiveSettings,
+      target.audioTrack?.durationSec
+    );
+
+    await updateScript(scriptId, {
+      scenes: updatedScenes,
+      voiceoverSettings: effectiveSettings,
+      isAudioSynced: true,
+    });
+
+    return { updatedScenes, timelineData };
+  };
+
+  // Generate Voice for Single Scene
+  const generateSceneVoice = async (
+    scriptId: string,
+    sceneNumber: number,
+    voiceSettings?: Partial<VoiceoverSettings>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    const settings = {
+      ...(target.voiceoverSettings || DEFAULT_VOICEOVER_SETTINGS),
+      ...voiceSettings,
+    };
+
+    const scene = target.scenes.find((s) => s.sceneNumber === sceneNumber);
+    if (!scene) return;
+
+    const cadence = calculateExactSpeechCadence(
+      scene.voiceover || scene.dialogue || scene.visualDescription,
+      settings.speechRateWPM,
+      { language: settings.language }
+    );
+
+    const updatedScenes = target.scenes.map((sc) => {
+      if (sc.sceneNumber !== sceneNumber) return sc;
+      return {
+        ...sc,
+        duration: `${Math.round(cadence.estimatedDurationSec)}s`,
+        durationSec: cadence.estimatedDurationSec,
+        mediaStatus: 'Audio Synced' as SceneMediaStatus,
+        generatedVoice: {
+          voiceName: settings.voiceName,
+          durationSec: cadence.estimatedDurationSec,
+        },
+      };
+    });
+
+    await updateScript(scriptId, { scenes: updatedScenes, voiceoverSettings: settings });
+  };
+
+  // Generate All Scenes Voice
+  const generateAllScenesVoice = async (
+    scriptId: string,
+    voiceSettings?: Partial<VoiceoverSettings>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return;
+
+    setIsGenerating(true);
+    setGenerationStep('Synthesizing voiceover cadence & audio synchronization across all scenes...');
+
+    try {
+      const settings = {
+        ...(target.voiceoverSettings || DEFAULT_VOICEOVER_SETTINGS),
+        ...voiceSettings,
+      };
+
+      const { updatedScenes } = syncScenesToVoiceTimeline(target.scenes, settings);
+
+      const finalizedScenes = updatedScenes.map((sc) => ({
+        ...sc,
+        mediaStatus: 'Audio Synced' as SceneMediaStatus,
+      }));
+
+      await updateScript(scriptId, {
+        scenes: finalizedScenes,
+        voiceoverSettings: settings,
+        isAudioSynced: true,
+      });
+
+      setIsGenerating(false);
+      setGenerationStep('');
+    } catch (err: any) {
+      console.error('Failed to generate all scenes voice:', err);
+      setIsGenerating(false);
+      setGenerationStep('');
+      throw err;
+    }
+  };
+
+  // Export Script Subtitles (SRT or VTT)
+  const exportScriptSubtitles = (
+    scriptId: string,
+    format: 'srt' | 'vtt'
+  ): string => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) return '';
+    return format === 'vtt'
+      ? generateVTTFromScenes(target.scenes)
+      : generateSRTFromScenes(target.scenes);
+  };
+
   // Delete Script
   const deleteScript = async (scriptId: string): Promise<void> => {
     setError(null);
@@ -877,21 +1246,27 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Save Script SEO
+  const saveScriptSEO = async (scriptId: string, seo: ScriptSEO): Promise<void> => {
+    await updateScript(scriptId, { seo });
+  };
+
   // Generate SEO
   const generateSEO = async (scriptId: string): Promise<ScriptSEO> => {
     const target = scripts.find((s) => s.id === scriptId) || activeScript;
     if (!target) throw new Error('Script not found');
 
     setIsGenerating(true);
-    setGenerationStep('Generating algorithmic SEO keywords, tags, and chapters...');
+    setGenerationStep('Generating algorithmic SEO keywords, tags, and chapters with Gemini...');
 
     try {
       const fullText = target.sections.map((s) => `${s.name}:\n${s.content}`).join('\n\n');
-      const seo = await generateSEOAPI({
+      const seo = await generateSeoWithAI({
+        topic: target.settings.topic || target.title,
         scriptText: fullText,
-        topic: target.settings.topic,
         platform: target.type,
         audience: target.settings.audience,
+        scenes: target.scenes,
       });
 
       await updateScript(scriptId, { seo });
@@ -906,19 +1281,42 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Save Script Thumbnails
+  const saveScriptThumbnails = async (scriptId: string, thumbnailConcepts: ThumbnailConcept[]): Promise<void> => {
+    await updateScript(scriptId, { thumbnailConcepts });
+  };
+
+  // Update a single Thumbnail Concept
+  const updateThumbnailConcept = async (
+    scriptId: string,
+    conceptId: string,
+    updates: Partial<ThumbnailConcept>
+  ): Promise<void> => {
+    const target = scripts.find((s) => s.id === scriptId) || activeScript;
+    if (!target) throw new Error('Script not found');
+
+    const updatedConcepts = (target.thumbnailConcepts || []).map((c) =>
+      c.id === conceptId ? { ...c, ...updates } : c
+    );
+    await updateScript(scriptId, { thumbnailConcepts: updatedConcepts });
+  };
+
   // Generate Thumbnails
   const generateThumbnails = async (scriptId: string): Promise<ThumbnailConcept[]> => {
     const target = scripts.find((s) => s.id === scriptId) || activeScript;
     if (!target) throw new Error('Script not found');
 
     setIsGenerating(true);
-    setGenerationStep('Designing high-CTR thumbnail layouts & visual concepts...');
+    setGenerationStep('Designing high-CTR thumbnail layouts & visual concepts with Gemini...');
 
     try {
-      const thumbnails = await generateThumbnailsAPI({
+      const thumbnails = await generateThumbnailsWithAI({
         title: target.title,
-        concept: target.settings.ideaText || target.settings.topic,
-        platform: target.type,
+        topic: target.settings.topic || target.title,
+        conceptText: target.settings.ideaText || target.settings.topic,
+        storyMode: target.primaryMode || 'Tech Explainer',
+        scenes: target.scenes,
+        aspectRatio: target.aspectRatio || '16:9',
       });
 
       await updateScript(scriptId, { thumbnailConcepts: thumbnails });
@@ -959,6 +1357,22 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
       setError(err.message || 'Failed to repurpose script.');
       throw err;
     }
+  };
+
+  // Save Script Repurposed Shorts
+  const saveScriptRepurposedShorts = async (
+    scriptId: string,
+    repurposedShorts: RepurposedShort[]
+  ): Promise<void> => {
+    await updateScript(scriptId, { repurposedShorts });
+  };
+
+  // Save Film Story Bible
+  const saveFilmStoryBible = async (
+    scriptId: string,
+    filmBible: FilmStoryBible
+  ): Promise<void> => {
+    await updateScript(scriptId, { filmBible });
   };
 
   // Generate Complete Content Package
@@ -1372,6 +1786,63 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
     [mediaAssets, activeScript?.id]
   );
 
+  // Create Generation Job
+  const createGenerationJob = async (params: CreateGenerationJobParams): Promise<MediaGenerationJob> => {
+    const job = await mediaGenerationService.createJob(
+      {
+        ...params,
+        projectId: params.projectId || activeProject?.id,
+        scriptId: params.scriptId || activeScript?.id,
+      },
+      user?.id
+    );
+    setGenerationJobs((prev) => [job, ...prev.filter((j) => j.id !== job.id)]);
+    // Reload assets to capture pre-created or updated asset
+    await loadProjectAssets();
+    return job;
+  };
+
+  // Cancel Generation Job
+  const cancelGenerationJob = async (jobId: string): Promise<void> => {
+    await mediaGenerationService.cancelJob(jobId, user?.id);
+    setGenerationJobs((prev) =>
+      prev.map((j) => (j.id === jobId ? { ...j, status: 'cancelled', error: 'Job cancelled by user.' } : j))
+    );
+    await loadProjectAssets();
+  };
+
+  // Retry Generation Job
+  const retryGenerationJob = async (jobId: string): Promise<void> => {
+    await mediaGenerationService.retryJob(jobId, user?.id);
+    setGenerationJobs((prev) =>
+      prev.map((j) => (j.id === jobId ? { ...j, status: 'queued', progress: 0, error: undefined } : j))
+    );
+    await loadProjectAssets();
+  };
+
+  // Delete Generation Job
+  const deleteGenerationJob = async (jobId: string): Promise<void> => {
+    await mediaGenerationService.deleteJob(jobId, user?.id);
+    setGenerationJobs((prev) => prev.filter((j) => j.id !== jobId));
+  };
+
+  // Get Jobs For Scene
+  const getJobsForScene = useCallback(
+    (sceneNumber: number, scriptId?: string): MediaGenerationJob[] => {
+      const targetScriptId = scriptId || activeScript?.id;
+      return generationJobs.filter((j) => {
+        const matchesScene = j.sceneNumber === sceneNumber;
+        return targetScriptId ? matchesScene && (!j.scriptId || j.scriptId === targetScriptId) : matchesScene;
+      });
+    },
+    [generationJobs, activeScript?.id]
+  );
+
+  // Get Active Jobs Count
+  const getActiveJobsCount = useCallback((): number => {
+    return generationJobs.filter((j) => j.status === 'queued' || j.status === 'processing').length;
+  }, [generationJobs]);
+
   // Filter scripts for active project
   const projectScripts = activeProject
     ? scripts.filter((s) => !s.projectId || s.projectId === activeProject.id)
@@ -1393,6 +1864,11 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         updateSection,
         updateScene,
         updateSceneShotPlan,
+        updateSceneMediaPrompts,
+        batchUpdateSceneMediaPrompts,
+        enhanceScenePrompts,
+        enhanceAllScenePrompts,
+        updateSceneMediaStatus,
         generateSceneBreakdown,
         addScene,
         deleteScene,
@@ -1400,6 +1876,11 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         regenerateScene,
         saveSceneBreakdown,
         syncScriptToAudio,
+        updateVoiceoverSettings,
+        syncScriptToVoiceSettings,
+        generateSceneVoice,
+        generateAllScenesVoice,
+        exportScriptSubtitles,
         deleteScript,
         saveScript,
         setActiveScript,
@@ -1408,8 +1889,13 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         restoreVersion,
         rewriteSection,
         generateSEO,
+        saveScriptSEO,
         generateThumbnails,
+        saveScriptThumbnails,
+        updateThumbnailConcept,
         repurposeScript,
+        saveScriptRepurposedShorts,
+        saveFilmStoryBible,
         generateCompleteContentPackage,
         generateSceneImage,
         generateSceneVideo,
@@ -1429,6 +1915,15 @@ export function ScriptProvider({ children }: { children: React.ReactNode }) {
         attachAssetToScene,
         detachAssetFromScene,
         getAssetsForScene,
+        // Media Generation Pipeline
+        generationJobs,
+        isLoadingJobs,
+        createGenerationJob,
+        cancelGenerationJob,
+        retryGenerationJob,
+        deleteGenerationJob,
+        getJobsForScene,
+        getActiveJobsCount,
       }}
     >
       {children}

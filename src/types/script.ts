@@ -46,100 +46,31 @@ export type AISectionAction =
   | 'alternative'
   | 'alternative_angle';
 
-export type CameraShotType =
-  | 'Extreme Wide Shot'
-  | 'Wide Shot'
-  | 'Medium Shot'
-  | 'Medium Close-Up'
-  | 'Close-Up'
-  | 'Extreme Close-Up'
-  | 'Over-the-Shoulder'
-  | 'POV'
-  | 'Drone Aerial'
-  | 'Dutch Angle'
-  | 'Macro';
+import type {
+  ScriptScene,
+  Scene,
+  CameraShotType,
+  CameraMovement,
+  CameraTransition,
+  ShotPlan,
+  AudioTimingSync,
+  SceneBreakdownGenerationParams,
+  SceneBreakdownResponse,
+} from './scene';
 
-export type CameraMovement =
-  | 'Static'
-  | 'Pan Left/Right'
-  | 'Tilt Up/Down'
-  | 'Slow Push-In / Dolly'
-  | 'Pull-Out'
-  | 'Tracking / Gimbal'
-  | 'Handheld Organic'
-  | 'Whip Pan'
-  | 'Orbit';
-
-export interface ShotPlan {
-  shotType: CameraShotType | string;
-  movement: CameraMovement | string;
-  framing: '16:9 Widescreen' | '9:16 Vertical';
-  lightingMood: string;
-  colorGrade: string;
-  focalPoint: string;
-  visualPrompt: string;
-  cinematicNotes?: string;
-}
-
-export interface AudioTimingSync {
-  startSec: number;
-  endSec: number;
-  timecode: string;
-  durationSec: number;
-  wordCount: number;
-  speechRateWPM: number;
-  isSyncedToAudioFile?: boolean;
-}
+export * from './scene';
+export * from './voice';
+export * from './repurposing';
+export * from './film';
+import type { VoiceoverSettings } from './voice';
+import type { RepurposedShort } from './repurposing';
+import type { FilmStoryBible } from './film';
 
 export interface ScriptSection {
   id: string;
   name: string;
   content: string;
   order: number;
-}
-
-export interface ScriptScene {
-  sceneId?: string;
-  sceneNumber: number;
-  title?: string;
-  duration: string;
-  durationSec?: number;
-  voiceover: string;
-  dialogue?: string;
-  visualDescription: string;
-  bRoll?: string;
-  bRollSuggestion: string;
-  shotType?: CameraShotType | string;
-  cameraMovement?: CameraMovement | string;
-  cameraDirection: string;
-  transition: string;
-  onScreenText: string;
-  music?: string;
-  sfxMusic: string;
-  soundEffects?: string;
-  sfx?: string;
-  imageGenerationPrompt?: string;
-  videoGenerationPrompt?: string;
-  sceneMode?: StoryMode;
-  primaryMode?: StoryMode;
-  secondaryModes?: StoryMode[];
-  shotPlan?: ShotPlan;
-  audioTiming?: AudioTimingSync;
-  lightingMood?: string;
-  action?: string;
-  mediaAssetIds?: string[];
-  generatedImage?: string;
-  generatedVideo?: {
-    status: 'idle' | 'generating' | 'ready' | 'failed';
-    previewUrl?: string;
-    prompt?: string;
-    assetId?: string;
-  };
-  generatedVoice?: {
-    audioUrl?: string;
-    voiceName?: string;
-    durationSec?: number;
-  };
 }
 
 export interface ScriptVersion {
@@ -166,6 +97,23 @@ export interface ScriptSEO {
     audioRecommendation: string;
     engagementQuestion: string;
   };
+  titleOptions?: Array<{
+    id: string;
+    title: string;
+    hookType: 'curiosity' | 'urgency' | 'value' | 'question' | 'outlier';
+    score: number;
+    charCount: number;
+    estimatedCTR?: string;
+  }>;
+  keywordMetrics?: Array<{
+    keyword: string;
+    searchVolume: 'High' | 'Very High' | 'Medium' | 'Breakout';
+    competition: 'Low' | 'Medium' | 'High';
+    relevance: number;
+  }>;
+  seoScore?: number;
+  tagCharacterCount?: number;
+  bestUploadTiming?: string;
 }
 
 export interface ThumbnailConcept {
@@ -178,6 +126,20 @@ export interface ThumbnailConcept {
   secondaryTextOverlay?: string;
   focalPoint: string;
   predictedCTRRating: string;
+  aspectRatio?: '16:9' | '9:16';
+  midjourneyPrompt?: string;
+  fluxPrompt?: string;
+  dallePrompt?: string;
+  colorPalette?: string | string[];
+  textColor?: string;
+  textBgColor?: string;
+  overlayText?: string;
+  estimatedCTR?: string;
+  layoutDiagram?: string;
+  previewImageUrl?: string;
+  fontFamily?: string;
+  fontSize?: number;
+  textPosition?: 'top-left' | 'top-right' | 'center' | 'bottom-left' | 'bottom-right';
 }
 
 export interface RepurposeItem {
@@ -262,10 +224,13 @@ export interface Script {
   seo?: ScriptSEO;
   thumbnailConcepts?: ThumbnailConcept[];
   repurposeVersions?: RepurposeVersions;
+  repurposedShorts?: RepurposedShort[];
+  filmBible?: FilmStoryBible;
   captions?: CaptionLine[];
   captionConfig?: CaptionConfig;
   aspectRatio?: '16:9' | '9:16';
   isAudioSynced?: boolean;
+  voiceoverSettings?: VoiceoverSettings;
   audioTrack?: {
     fileName: string;
     fileSize: number;

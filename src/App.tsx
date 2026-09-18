@@ -24,6 +24,7 @@ import { IdeaGeneratorPage } from './pages/ideas/IdeaGeneratorPage';
 import { ScriptStudioPage } from './pages/script/ScriptStudioPage';
 import { IdeaProvider } from './context/IdeaContext';
 import { ScriptProvider } from './context/ScriptContext';
+import { YouTubeProvider } from './context/YouTubeContext';
 import { NewProjectModal } from './components/common/NewProjectModal';
 import { CommandModal } from './components/common/CommandModal';
 import { RoadmapModal } from './components/common/RoadmapModal';
@@ -211,7 +212,9 @@ export default function App() {
             <CompetitorProvider>
               <IdeaProvider>
                 <ScriptProvider>
-                  <AppContent />
+                  <YouTubeProvider>
+                    <AppContent />
+                  </YouTubeProvider>
                 </ScriptProvider>
               </IdeaProvider>
             </CompetitorProvider>

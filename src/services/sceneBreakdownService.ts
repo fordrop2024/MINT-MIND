@@ -1,8 +1,66 @@
 import { ScriptScene, StoryMode, CameraShotType, CameraMovement } from '../types/script';
+import { SceneBreakdownGenerationParams } from '../types/scene';
 import { generateProductionShotPlan } from './audioTimingSyncService';
+import { generateSceneBreakdownAPI } from './aiService';
+
+/**
+ * Automatically generates a complete, cinematic Scene Breakdown from existing
+ * Script Studio data using Gemini AI.
+ *
+ * Receives Script data (title, narrative sections or full text, target platform,
+ * audience, tone, and Story Mode) and coordinates with the server-side Gemini
+ * intelligence engine to architect:
+ *  - Scene sequence, timing, and word-rate sync
+ *  - Spoken dialogue / voiceover line segmentation
+ *  - Visual composition & B-roll cutaway requirements
+ *  - Camera shot types & camera movements
+ *  - Dynamic visual generation prompts (Midjourney / Flux / Runway / Sora)
+ *  - Music cues, atmospheric SFX, and on-screen text overlays
+ *
+ * @param scriptData Script data from Script Studio
+ * @param options Optional mode/duration/aspect overrides
+ * @returns Array of sequentially indexed, production-ready ScriptScene objects
+ */
+export async function generateSceneBreakdownFromScript(
+  scriptData: SceneBreakdownGenerationParams,
+  options?: {
+    primaryMode?: StoryMode;
+    secondaryModes?: StoryMode[];
+    targetDuration?: string;
+    aspectRatio?: '16:9' | '9:16';
+  }
+): Promise<ScriptScene[]> {
+  const primaryMode = options?.primaryMode || scriptData.primaryMode || 'Documentary';
+  const secondaryModes = options?.secondaryModes || scriptData.secondaryModes || [];
+  const duration = options?.targetDuration || scriptData.duration;
+  const isShortForm =
+    scriptData.platform?.includes('Short') ||
+    scriptData.platform?.includes('Reel') ||
+    scriptData.platform?.includes('Story');
+  const targetAspect = options?.aspectRatio || (isShortForm ? '9:16' : '16:9');
+
+  // Call the Gemini-powered server breakdown pipeline
+  const rawScenes = await generateSceneBreakdownAPI({
+    scriptTitle: scriptData.scriptTitle,
+    scriptText: scriptData.scriptText,
+    sections: scriptData.sections,
+    primaryMode,
+    secondaryModes,
+    platform: scriptData.platform || 'YouTube Long-form',
+    duration,
+    audience: scriptData.audience,
+    tone: scriptData.tone,
+  });
+
+  // Re-index, calculate audio timing timecodes, and generate cinematic shot plans
+  const normalizedScenes = reindexScenes(rawScenes, primaryMode, targetAspect);
+
+  return normalizedScenes;
+}
 
 /**
  * Validates and guarantees all required fields on a ScriptScene for the
+
  * Scene Breakdown and Shot Planning layer.
  */
 export function normalizeScene(

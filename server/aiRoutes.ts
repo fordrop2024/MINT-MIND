@@ -1297,6 +1297,95 @@ Return a strictly valid JSON object matching:
   }
 });
 
+// 5.5. Enhance Media Generation Prompts (Midjourney v6, Flux.1, Runway Gen-3, Luma, Sora + Audio Metadata)
+aiRouter.post('/enhance-media-prompts', async (req: Request, res: Response) => {
+  try {
+    const {
+      scene,
+      storyMode = 'Documentary',
+      aspectRatio = '16:9',
+      projectContext = {},
+    } = req.body;
+
+    if (!scene || typeof scene.sceneNumber !== 'number') {
+      return res.status(400).json({
+        success: false,
+        error: 'Scene object with sceneNumber is required.',
+        code: 'BAD_REQUEST',
+      });
+    }
+
+    const isVertical = aspectRatio === '9:16' || String(projectContext.platform || '').toLowerCase().includes('short');
+    const arParam = isVertical ? '9:16' : '16:9';
+
+    const prompt = `You are MintMind AI's Master Cinematographer, Prompt Engineer & Technical Director.
+Generate production-grade AI Media Generation Prompts for Scene #${scene.sceneNumber}: "${scene.title || `Scene ${scene.sceneNumber}`}".
+
+PROJECT CONTEXT:
+- Title: "${projectContext.title || 'Cinematic Production'}"
+- Topic: "${projectContext.topic || 'High-Impact Media'}"
+- Story Mode: ${storyMode}
+- Aspect Ratio: ${arParam}
+- Subject Anchor: "${projectContext.subjectAnchor || 'Consistent visual subject'}"
+
+SCENE DATA:
+- Voiceover / Dialogue: "${scene.voiceover || scene.dialogue || ''}"
+- Visual Description: "${scene.visualDescription || ''}"
+- B-Roll: "${scene.bRoll || scene.bRollSuggestion || ''}"
+- Camera Shot: "${scene.shotType || 'Medium Shot'}"
+- Camera Movement: "${scene.cameraMovement || 'Slow Push-In'}"
+- Transition: "${scene.transition || 'Cut'}"
+- Music / SFX: "${scene.music || scene.sfxMusic || ''}" / "${scene.soundEffects || scene.sfx || ''}"
+
+TASK:
+Craft enhanced, production-ready prompts tailored specifically for leading image and video AI generation models, plus camera physics and audio timing metadata.
+
+Return a strictly valid JSON object matching:
+{
+  "midjourneyPrompt": "Cinematic visual prompt formatted for Midjourney v6 with ARRI Alexa 35, 35mm anamorphic lens, lighting, composition, photorealistic, 8k, --ar ${arParam} --v 6.0 --style raw",
+  "fluxPrompt": "Flux.1 prompt focused on textural realism, volumetric ambient occlusion, and compositional depth",
+  "runwayPrompt": "Runway Gen-3 prompt specifying motion trajectory, camera speed, physics simulation, and atmospheric quality",
+  "lumaPrompt": "Luma Dream Machine prompt specifying continuous camera path and physical interaction",
+  "soraPrompt": "OpenAI Sora prompt specifying temporal realism, nuanced expressions, and physical consistency",
+  "cameraSettings": {
+    "lens": "e.g. 35mm Anamorphic Prime",
+    "aperture": "e.g. f/1.8",
+    "shutter": "e.g. 1/50 sec 180° angle",
+    "sensor": "e.g. ARRI Alexa 35",
+    "movementStyle": "e.g. Steadicam smooth tracking"
+  },
+  "lightingMood": "Specific cinematic lighting setup (e.g. Chiaroscuro high-contrast key light with amber rim)",
+  "colorGrade": "Filmic color palette description (e.g. Kodak Vision3 500T 5219 film stock LUT with muted cool shadows)",
+  "subjectConsistencyAnchor": "Clear visual signature for character/subject consistency across scenes",
+  "negativePrompt": "blurry, low resolution, deformed, plastic skin, oversaturated, amateur footage, glitch, jitter",
+  "audioMetadata": {
+    "voiceStyle": "Tone and cadence recommendation for voiceover",
+    "pacingWPM": 145,
+    "emotion": "Dominant vocal emotion (e.g. Solemn intrigue, urgent revelation, calm authority)",
+    "recommendedVoice": "e.g. Adam (Deep Baritone) or Rachel (Intelligent Documentary)",
+    "sfxLayering": ["Sound effect 1", "Sound effect 2", "Atmospheric background layer"],
+    "musicBpm": "e.g. 74 BPM - Minimalist Cello & Ambient Synth Drone"
+  }
+}`;
+
+    const enhanced = await aiProviderRegistry.getActiveProvider().generateStructuredJSON<any>({
+      prompt,
+    });
+
+    res.json({
+      success: true,
+      enhancedPrompts: enhanced,
+    });
+  } catch (err: any) {
+    const errorObj = geminiService.sanitizeError(err);
+    res.status(errorObj.statusCode).json({
+      success: false,
+      error: errorObj.message,
+      code: errorObj.code,
+    });
+  }
+});
+
 // 6. Rewrite Specific Section Only
 aiRouter.post('/rewrite-section', async (req: Request, res: Response) => {
   try {

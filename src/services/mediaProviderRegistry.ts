@@ -38,6 +38,37 @@ class MediaProviderRegistryService {
   }
 
   /**
+   * Check if a specific provider is registered
+   */
+  public hasProvider(id: string): boolean {
+    return this.providers.has(id);
+  }
+
+  /**
+   * Check if any configured provider exists for a domain
+   */
+  public isDomainSupported(domain: MediaProviderDomain): boolean {
+    return this.getProvidersByDomain(domain).some((p) => p.isConfigured);
+  }
+
+  /**
+   * Get default provider for a creative domain
+   */
+  public getDefaultProviderForDomain(domain: MediaProviderDomain): IMediaProvider | undefined {
+    const domainProviders = this.getProvidersByDomain(domain);
+    return domainProviders.find((p) => p.isConfigured) || domainProviders[0];
+  }
+
+  /**
+   * List all domains supported by registered providers
+   */
+  public getAvailableDomains(): MediaProviderDomain[] {
+    const domains = new Set<MediaProviderDomain>();
+    this.providers.forEach((p) => domains.add(p.domain));
+    return Array.from(domains);
+  }
+
+  /**
    * Standby execution method ensuring provider readiness and error handling
    */
   public async generateMedia(request: MediaGenerationRequest): Promise<MediaGenerationResult> {

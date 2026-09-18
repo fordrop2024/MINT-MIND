@@ -166,6 +166,30 @@
         "updatedAt": { "type": "string", "description": "Last updated timestamp" }
       },
       "required": ["id", "type", "source", "status", "filename", "createdAt", "updatedAt"]
+    },
+    "MediaGenerationJob": {
+      "title": "MediaGenerationJob",
+      "description": "Media generation job tracking background synthesis tasks for images, videos, voiceover, and audio",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique job identifier" },
+        "jobId": { "type": "string", "description": "Job ID alias" },
+        "projectId": { "type": "string", "description": "Associated project ID" },
+        "scriptId": { "type": "string", "description": "Associated script ID" },
+        "sceneId": { "type": "string", "description": "Associated scene ID" },
+        "sceneNumber": { "type": "number", "description": "Target scene number" },
+        "assetId": { "type": "string", "description": "Target MediaAsset ID linked to this job" },
+        "type": { "type": "string", "enum": ["image", "video", "audio", "voiceover", "music", "sound-effect", "b-roll"], "description": "Media classification" },
+        "provider": { "type": "string", "description": "Media generation provider identifier" },
+        "status": { "type": "string", "enum": ["queued", "processing", "completed", "failed", "cancelled"], "description": "Lifecycle execution state" },
+        "prompt": { "type": "string", "description": "Generation prompt" },
+        "progress": { "type": "number", "description": "Progress percentage 0-100" },
+        "error": { "type": "string", "description": "Failure error message if any" },
+        "metadata": { "type": "object", "description": "Custom metadata or technical generation parameters" },
+        "createdAt": { "type": "string", "description": "Job creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Job last updated timestamp" }
+      },
+      "required": ["id", "type", "provider", "status", "prompt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -188,6 +212,10 @@
     "/users/{userId}/mediaAssets/{assetId}": {
       "schema": "MediaAsset",
       "description": "User-owned media assets linked to scripts and scenes"
+    },
+    "/users/{userId}/generationJobs/{jobId}": {
+      "schema": "MediaGenerationJob",
+      "description": "User-owned media generation jobs tracking asset synthesis workflows"
     },
     "/users/{userId}/competitors/{competitorId}": {
       "schema": "Competitor",

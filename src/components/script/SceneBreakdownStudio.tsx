@@ -29,10 +29,13 @@ import {
   Mic,
   Unlink,
   X,
+  Activity,
+  RotateCw,
 } from 'lucide-react';
 import { useScript } from '../../context/ScriptContext';
 import { MediaAssetLibrary } from '../media/MediaAssetLibrary';
-import type { MediaAsset } from '../../types/mediaAsset';
+import { GenerationJobsPanel } from '../media/GenerationJobsPanel';
+import type { MediaAsset, MediaAssetType } from '../../types/mediaAsset';
 import {
   Script,
   ScriptScene,
@@ -110,10 +113,18 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
     getAssetsForScene,
     attachAssetToScene,
     detachAssetFromScene,
+    generationJobs,
+    createGenerationJob,
+    cancelGenerationJob,
+    retryGenerationJob,
+    getJobsForScene,
+    getActiveJobsCount,
+    enhanceScenePrompts,
   } = useScript();
 
   // Local state
   const [scenes, setScenes] = useState<ScriptScene[]>(script.scenes || []);
+  const [enhancingSceneNum, setEnhancingSceneNum] = useState<number | null>(null);
   const [selectedStoryMode, setSelectedStoryMode] = useState<StoryMode>(
     script.primaryMode || 'Documentary'
   );
@@ -129,6 +140,53 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
   // Media Asset Pipeline Modal States
   const [isMediaLibraryModalOpen, setIsMediaLibraryModalOpen] = useState<boolean>(false);
   const [attachModalSceneNumber, setAttachModalSceneNumber] = useState<number | null>(null);
+
+  // Generation Pipeline Drawer State
+  const [isJobsDrawerOpen, setIsJobsDrawerOpen] = useState<boolean>(false);
+  const [queueingJobSceneNum, setQueueingJobSceneNum] = useState<number | null>(null);
+
+  // Handle queueing a generation job for a scene
+  const handleQueueSceneJob = async (
+    scene: ScriptScene,
+    type: MediaAssetType,
+    promptOverride?: string
+  ) => {
+    let prompt = promptOverride;
+    if (!prompt) {
+      if (type === 'image') prompt = scene.imageGenerationPrompt || scene.visualDescription;
+      else if (type === 'video' || type === 'b-roll') prompt = scene.videoGenerationPrompt || scene.visualDescription;
+      else if (type === 'voiceover') prompt = scene.dialogue || scene.voiceover;
+      else if (type === 'music') prompt = scene.music || scene.sfxMusic || 'Cinematic background music score';
+      else if (type === 'sound-effect' || type === 'audio') prompt = scene.soundEffects || scene.sfx || 'Crisp foley sound effect';
+    }
+
+    if (!prompt || !prompt.trim()) {
+      onNotification?.(`Cannot queue ${type} job: No prompt or requirement specified for Scene #${scene.sceneNumber}.`);
+      return;
+    }
+
+    try {
+      setQueueingJobSceneNum(scene.sceneNumber);
+      await createGenerationJob({
+        scriptId: script.id,
+        projectId: script.projectId,
+        sceneId: `scene_${scene.sceneNumber}`,
+        sceneNumber: scene.sceneNumber,
+        type,
+        prompt: prompt.trim(),
+        metadata: {
+          sceneDurationSec: scene.durationSec,
+          shotType: scene.shotType,
+          cameraMovement: scene.cameraMovement,
+        },
+      });
+      onNotification?.(`Queued ${type} generation job for Scene #${scene.sceneNumber}.`);
+    } catch (err: any) {
+      onNotification?.(`Failed to queue job: ${err.message || 'Unknown error'}`);
+    } finally {
+      setQueueingJobSceneNum(null);
+    }
+  };
 
   // Regeneration Modal state
   const [regenModalScene, setRegenModalScene] = useState<ScriptScene | null>(null);
@@ -297,6 +355,32 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
       notify(err.message || 'Regeneration failed');
     } finally {
       setIsRegeneratingScene(false);
+    }
+  };
+
+  // Enhance scene prompts with Gemini
+  const handleEnhanceScenePrompts = async (sceneNumber: number) => {
+    setEnhancingSceneNum(sceneNumber);
+    try {
+      const enhanced = await enhanceScenePrompts(script.id, sceneNumber);
+      setScenes((prev) =>
+        prev.map((s) =>
+          s.sceneNumber === sceneNumber
+            ? {
+                ...s,
+                enhancedPrompts: enhanced,
+                imageGenerationPrompt: enhanced.midjourneyPrompt || s.imageGenerationPrompt,
+                videoGenerationPrompt: enhanced.runwayPrompt || s.videoGenerationPrompt,
+                mediaStatus: 'Prompt Ready',
+              }
+            : s
+        )
+      );
+      notify(`Scene #${sceneNumber} media prompts enhanced with Gemini!`);
+    } catch (err: any) {
+      notify(err.message || 'Failed to enhance scene prompts');
+    } finally {
+      setEnhancingSceneNum(null);
     }
   };
 
@@ -514,6 +598,25 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
             >
               <Save className="w-3.5 h-3.5" />
               <span>{isDirty ? 'Save Plan *' : 'Saved'}</span>
+            </button>
+
+            {/* Media Generation Pipeline Jobs Button */}
+            <button
+              onClick={() => setIsJobsDrawerOpen(true)}
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 hover:border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              title="Open Media Generation Pipeline Jobs"
+            >
+              <Activity
+                className={`w-3.5 h-3.5 ${
+                  getActiveJobsCount() > 0 ? 'text-cyan-400 animate-pulse' : 'text-slate-400'
+                }`}
+              />
+              <span>Jobs Pipeline</span>
+              {getActiveJobsCount() > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  {getActiveJobsCount()}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -794,6 +897,10 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
             const attachedAudio = sceneMediaAssets.filter(
               (a) => a.type === 'audio' || a.type === 'music' || a.type === 'sound-effect'
             );
+
+            // Generation Pipeline jobs for this scene
+            const sceneJobs = getJobsForScene(scene.sceneNumber, script.id);
+            const isQueueingThisScene = queueingJobSceneNum === scene.sceneNumber;
 
             return (
               <div
@@ -1141,27 +1248,38 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
                         <span className="text-[10px] font-mono uppercase text-cyan-400 font-bold flex items-center gap-1">
                           <Sparkles className="w-3 h-3" /> Image Generation Prompt (Midjourney / Flux / DALL-E):
                         </span>
-                        <button
-                          onClick={() =>
-                            handleCopy(
-                              scene.imageGenerationPrompt || scene.visualDescription,
-                              `img_prompt_${scene.sceneNumber}`
-                            )
-                          }
-                          className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 text-[10px] font-mono flex items-center gap-1 transition-colors border border-slate-800"
-                        >
-                          {copiedKey === `img_prompt_${scene.sceneNumber}` ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-400" />
-                              <span>Copied!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3 h-3 text-cyan-400" />
-                              <span>Copy Prompt</span>
-                            </>
-                          )}
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleEnhanceScenePrompts(scene.sceneNumber)}
+                            disabled={enhancingSceneNum === scene.sceneNumber}
+                            className="px-2 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-[10px] font-mono flex items-center gap-1 transition-colors border border-cyan-500/30 disabled:opacity-50"
+                            title="Auto-enhance prompts with Midjourney v6 & Runway parameters via Gemini"
+                          >
+                            <Sparkles className={`w-3 h-3 ${enhancingSceneNum === scene.sceneNumber ? 'animate-spin' : ''}`} />
+                            <span>{enhancingSceneNum === scene.sceneNumber ? 'Enhancing...' : 'AI Enhance'}</span>
+                          </button>
+                          <button
+                            onClick={() =>
+                              handleCopy(
+                                scene.imageGenerationPrompt || scene.visualDescription,
+                                `img_prompt_${scene.sceneNumber}`
+                              )
+                            }
+                            className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 text-[10px] font-mono flex items-center gap-1 transition-colors border border-slate-800"
+                          >
+                            {copiedKey === `img_prompt_${scene.sceneNumber}` ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span>Copied!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3 text-cyan-400" />
+                                <span>Copy Prompt</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
                       <textarea
                         rows={2}
@@ -1259,6 +1377,15 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
                               ? 'Prompt Defined'
                               : 'Pending Prompt'}
                           </div>
+                          <button
+                            onClick={() => handleQueueSceneJob(scene, 'image')}
+                            disabled={isQueueingThisScene}
+                            className="mt-1 w-full py-0.5 rounded bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/20 text-[10px] font-mono flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                            title="Queue AI Image Generation Job"
+                          >
+                            <Sparkles className="w-2.5 h-2.5" />
+                            <span>Queue Image</span>
+                          </button>
                         </div>
 
                         {/* Video / B-Roll Requirement */}
@@ -1286,6 +1413,15 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
                               ? 'Video Ready'
                               : scene.bRoll || 'B-Roll specified'}
                           </div>
+                          <button
+                            onClick={() => handleQueueSceneJob(scene, 'video')}
+                            disabled={isQueueingThisScene}
+                            className="mt-1 w-full py-0.5 rounded bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/20 text-[10px] font-mono flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                            title="Queue AI Video Generation Job"
+                          >
+                            <Film className="w-2.5 h-2.5" />
+                            <span>Queue Video</span>
+                          </button>
                         </div>
 
                         {/* Voiceover Requirement */}
@@ -1313,6 +1449,15 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
                               ? 'Audio track synced'
                               : `${(scene.dialogue || scene.voiceover || '').split(/\s+/).filter(Boolean).length} words spoken`}
                           </div>
+                          <button
+                            onClick={() => handleQueueSceneJob(scene, 'voiceover')}
+                            disabled={isQueueingThisScene}
+                            className="mt-1 w-full py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/20 text-[10px] font-mono flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                            title="Queue AI Voiceover Synthesis Job"
+                          >
+                            <Mic className="w-2.5 h-2.5" />
+                            <span>Queue Voice</span>
+                          </button>
                         </div>
 
                         {/* Music & SFX Requirement */}
@@ -1336,8 +1481,80 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
                               ? attachedAudio[0].filename
                               : scene.music || scene.soundEffects || 'Atmospheric background'}
                           </div>
+                          <button
+                            onClick={() => handleQueueSceneJob(scene, 'music')}
+                            disabled={isQueueingThisScene}
+                            className="mt-1 w-full py-0.5 rounded bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/20 text-[10px] font-mono flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                            title="Queue AI Music / Audio Cue Job"
+                          >
+                            <Music className="w-2.5 h-2.5" />
+                            <span>Queue Audio</span>
+                          </button>
                         </div>
                       </div>
+
+                      {/* Scene Generation Pipeline Jobs */}
+                      {sceneJobs.length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          <div className="flex items-center justify-between text-[10px] font-mono uppercase text-slate-400 font-semibold">
+                            <span className="flex items-center gap-1 text-cyan-400">
+                              <Activity className="w-3 h-3" />
+                              Scene Generation Pipeline ({sceneJobs.length}):
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {sceneJobs.map((job) => (
+                              <div
+                                key={job.id}
+                                className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
+                              >
+                                <div className="min-w-0 pr-2">
+                                  <div className="flex items-center gap-1.5 font-semibold text-slate-300 text-[11px]">
+                                    <span className="capitalize">{job.type}</span>
+                                    <span className="text-[10px] font-mono text-slate-500">• {job.provider}</span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 truncate max-w-xs font-mono">
+                                    {job.prompt}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
+                                      job.status === 'completed'
+                                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                        : job.status === 'failed'
+                                        ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                        : job.status === 'cancelled'
+                                        ? 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
+                                        : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 animate-pulse'
+                                    }`}
+                                  >
+                                    {job.status}
+                                  </span>
+                                  {job.status === 'failed' && (
+                                    <button
+                                      onClick={() => retryGenerationJob(job.id)}
+                                      className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-cyan-400 transition-colors"
+                                      title="Retry Job"
+                                    >
+                                      <RotateCw className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                  {(job.status === 'queued' || job.status === 'processing') && (
+                                    <button
+                                      onClick={() => cancelGenerationJob(job.id)}
+                                      className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-rose-400 transition-colors"
+                                      title="Cancel Job"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
 
                       {/* Attached Media Asset Items */}
                       {sceneMediaAssets.length > 0 ? (
@@ -1631,6 +1848,18 @@ export const SceneBreakdownStudio: React.FC<SceneBreakdownStudioProps> = ({
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. MEDIA GENERATION PIPELINE JOBS MODAL */}
+      {isJobsDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <GenerationJobsPanel
+              scriptId={script.id}
+              onClose={() => setIsJobsDrawerOpen(false)}
+            />
           </div>
         </div>
       )}

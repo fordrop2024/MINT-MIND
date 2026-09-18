@@ -8,6 +8,7 @@ import type {
   Script,
   ScriptSettings,
   ScriptScene,
+  EnhancedMediaPrompts,
   StoryMode,
   AISectionAction,
   ScriptSEO,
@@ -284,6 +285,26 @@ export async function regenerateSceneAPI(params: {
   });
 
   return data.scene;
+}
+
+export async function enhanceMediaPromptsAPI(params: {
+  scene: ScriptScene;
+  storyMode?: StoryMode;
+  aspectRatio?: '16:9' | '9:16';
+  projectContext?: {
+    title?: string;
+    topic?: string;
+    visualStyle?: string;
+    subjectAnchor?: string;
+  };
+}): Promise<EnhancedMediaPrompts> {
+  const data = await safeFetchJSON('/api/ai/enhance-media-prompts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+
+  return data.enhancedPrompts;
 }
 
 export async function rewriteSectionAPI(params: {

@@ -40,6 +40,7 @@ import {
   Film,
   Sliders,
   CheckCircle,
+  Mic,
 } from 'lucide-react';
 import { useScript } from '../../context/ScriptContext';
 import { useIdea } from '../../context/IdeaContext';
@@ -61,7 +62,14 @@ import { voiceEngine } from '../../services/voiceService';
 import { CompareVersionsModal } from '../../components/script/CompareVersionsModal';
 import { KineticCaptionStudio } from '../../components/script/KineticCaptionStudio';
 import { SceneBreakdownStudio } from '../../components/script/SceneBreakdownStudio';
+import { MediaPipelineStudio } from '../../components/script/MediaPipelineStudio';
 import { MediaAssetLibrary } from '../../components/media/MediaAssetLibrary';
+import { VoiceoverStudio } from '../../components/script/VoiceoverStudio';
+import { SeoStudio } from '../../components/script/SeoStudio';
+import { ThumbnailStudio } from '../../components/script/ThumbnailStudio';
+import { ShortsRepurposeStudio } from '../../components/script/ShortsRepurposeStudio';
+import { YouTubePublishStudio } from '../../components/youtube/YouTubePublishStudio';
+import { FilmIntelligenceStudio } from '../../components/film/FilmIntelligenceStudio';
 import type { StoryMode } from '../../types/storyMode';
 import { StoryModeBadge } from '../../components/storyMode/StoryModeBadge';
 import { StoryModeSelector } from '../../components/storyMode/StoryModeSelector';
@@ -109,12 +117,21 @@ export function ScriptStudioPage() {
     updateScene,
     updateSceneShotPlan,
     syncScriptToAudio,
+    updateVoiceoverSettings,
+    syncScriptToVoiceSettings,
+    generateSceneVoice,
+    generateAllScenesVoice,
+    exportScriptSubtitles,
     saveVersion,
     restoreVersion,
     rewriteSection,
     generateSEO,
+    saveScriptSEO,
     generateThumbnails,
+    saveScriptThumbnails,
     repurposeScript,
+    saveScriptRepurposedShorts,
+    saveFilmStoryBible,
     generateCompleteContentPackage,
     generateSceneImage,
     generateSceneVideo,
@@ -128,8 +145,9 @@ export function ScriptStudioPage() {
 
   // Active view tab
   const [activeTab, setActiveTab] = useState<
-    'editor' | 'scenes' | 'media' | 'captions' | 'seo' | 'thumbnails' | 'repurpose'
+    'editor' | 'scenes' | 'media' | 'voice' | 'captions' | 'seo' | 'thumbnails' | 'repurpose' | 'publish' | 'film_bible'
   >('editor');
+  const [mediaSubTab, setMediaSubTab] = useState<'pipeline' | 'library'>('pipeline');
 
   // Audio Sync & Shot Plan State
   const [isUploadingAudio, setIsUploadingAudio] = useState<boolean>(false);
@@ -557,6 +575,18 @@ export function ScriptStudioPage() {
             </button>
 
             <button
+              onClick={() => setActiveTab('voice')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 shrink-0 transition-all ${
+                activeTab === 'voice'
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/25'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Mic className="w-3.5 h-3.5" />
+              Voiceover & Audio Sync
+            </button>
+
+            <button
               onClick={() => {
                 setActiveTab('captions');
                 if (!activeScript.captions || activeScript.captions.length === 0) {
@@ -622,6 +652,30 @@ export function ScriptStudioPage() {
             >
               <Smartphone className="w-3.5 h-3.5" />
               Repurpose to Reels/Shorts
+            </button>
+
+            <button
+              onClick={() => setActiveTab('publish')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 shrink-0 transition-all ${
+                activeTab === 'publish'
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/25'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              Publish to YouTube
+            </button>
+
+            <button
+              onClick={() => setActiveTab('film_bible')}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 shrink-0 transition-all ${
+                activeTab === 'film_bible'
+                  ? 'bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/25'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Film className="w-3.5 h-3.5" />
+              Story Bible & Film Intel
             </button>
           </div>
 
@@ -874,23 +928,69 @@ export function ScriptStudioPage() {
           {/* TAB 2.5: MEDIA ASSET PIPELINE & LIBRARY */}
           {activeTab === 'media' && (
             <div className="space-y-4">
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <Layers className="w-4 h-4 text-cyan-400" />
-                    Media Asset Pipeline
+                    Media Pipeline & Asset System
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Manage visual prompts, video footage, voiceover, and audio tracks linked across all scenes.
+                    Auto-generate AI visual prompts (Midjourney, Flux, Runway, Sora) and manage linked scene assets.
                   </p>
+                </div>
+
+                <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800">
+                  <button
+                    onClick={() => setMediaSubTab('pipeline')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      mediaSubTab === 'pipeline'
+                        ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Prompt & Generation Studio
+                  </button>
+                  <button
+                    onClick={() => setMediaSubTab('library')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      mediaSubTab === 'library'
+                        ? 'bg-cyan-500 text-slate-950 shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Asset Library ({mediaAssets.length})
+                  </button>
                 </div>
               </div>
 
-              <MediaAssetLibrary
-                scriptId={activeScript.id}
-                projectId={activeScript.projectId}
-              />
+              {mediaSubTab === 'pipeline' ? (
+                <MediaPipelineStudio
+                  script={activeScript}
+                  onNotification={showNotification}
+                  onOpenSceneBreakdown={() => setActiveTab('scenes')}
+                />
+              ) : (
+                <MediaAssetLibrary
+                  scriptId={activeScript.id}
+                  projectId={activeScript.projectId}
+                />
+              )}
             </div>
+          )}
+
+          {/* TAB 2.8: VOICEOVER & AUDIO TIMING SYNCHRONIZATION */}
+          {activeTab === 'voice' && (
+            <VoiceoverStudio
+              script={activeScript}
+              onUpdateVoiceSettings={(settings) => updateVoiceoverSettings(activeScript.id, settings)}
+              onSyncTimeline={(settings) => syncScriptToVoiceSettings(activeScript.id, settings)}
+              onGenerateSceneVoice={(sceneNum, settings) => generateSceneVoice(activeScript.id, sceneNum, settings)}
+              onGenerateAllVoices={(settings) => generateAllScenesVoice(activeScript.id, settings)}
+              onExportSubtitles={(format) => exportScriptSubtitles(activeScript.id, format)}
+              onSyncToAudioFile={async (durationSec, meta) => {
+                await syncScriptToAudio(activeScript.id, durationSec, meta);
+              }}
+            />
           )}
 
           {/* TAB 3: CAPTIONS & KINETIC TYPOGRAPHY */}
@@ -903,273 +1003,64 @@ export function ScriptStudioPage() {
 
           {/* TAB 4: SCRIPT SEO & PACKAGING */}
           {activeTab === 'seo' && (
-            <div className="space-y-6">
-              {activeScript.seo ? (
-                <div className="space-y-6">
-                  {/* High-CTR Title & Description */}
-                  <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                      <span className="text-xs font-mono uppercase text-cyan-400 font-bold">
-                        Algorithmic YouTube & Social Metadata
-                      </span>
-                      <button
-                        onClick={() => handleCopy(activeScript.seo?.description || '', 'desc')}
-                        className="text-xs font-mono text-cyan-400 hover:underline flex items-center gap-1"
-                      >
-                        <Copy className="w-3 h-3" />
-                        Copy Description
-                      </button>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-slate-400">Optimized Title:</label>
-                      <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-sm font-bold text-white flex items-center justify-between">
-                        <span>{activeScript.seo.title}</span>
-                        <button
-                          onClick={() => handleCopy(activeScript.seo?.title || '', 'title')}
-                          className="p-1 text-slate-400 hover:text-white"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold text-slate-400">Video Description:</label>
-                      <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed font-sans">
-                        {activeScript.seo.description}
-                      </pre>
-                    </div>
-                  </div>
-
-                  {/* Keywords & Tags Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Tags */}
-                    <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
-                      <span className="text-xs font-mono uppercase text-slate-400 font-bold">
-                        Search Tags ({activeScript.seo.tags?.length || 0})
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {activeScript.seo.tags?.map((tag, tIdx) => (
-                          <span
-                            key={tIdx}
-                            className="text-xs font-mono px-2.5 py-1 rounded-lg bg-slate-950 text-slate-300 border border-slate-800"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Hashtags */}
-                    <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
-                      <span className="text-xs font-mono uppercase text-slate-400 font-bold">
-                        Hashtags ({activeScript.seo.hashtags?.length || 0})
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {activeScript.seo.hashtags?.map((hash, hIdx) => (
-                          <span
-                            key={hIdx}
-                            className="text-xs font-mono px-2.5 py-1 rounded-lg bg-cyan-950/40 text-cyan-300 border border-cyan-800/40"
-                          >
-                            {hash}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Chapters Breakdown */}
-                  {activeScript.seo.chapters?.length > 0 && (
-                    <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-3">
-                      <span className="text-xs font-mono uppercase text-slate-400 font-bold">
-                        YouTube Chapters (Retention Pacing)
-                      </span>
-                      <div className="space-y-2">
-                        {activeScript.seo.chapters.map((ch, cIdx) => (
-                          <div
-                            key={cIdx}
-                            className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-xs"
-                          >
-                            <span className="font-mono text-cyan-400 font-bold">{ch.timestamp}</span>
-                            <span className="text-slate-200 font-medium">{ch.title}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="py-12 text-center space-y-3">
-                  <p className="text-xs text-slate-400">No SEO generated yet for this script.</p>
-                  <button
-                    onClick={() => generateSEO(activeScript.id)}
-                    className="px-4 py-2 rounded-xl text-xs font-bold bg-cyan-500 text-slate-950"
-                  >
-                    Generate Algorithmic SEO
-                  </button>
-                </div>
-              )}
-            </div>
+            <SeoStudio
+              script={activeScript}
+              onSaveSeo={async (seo) => {
+                await saveScriptSEO(activeScript.id, seo);
+              }}
+              onRegenerateSeo={async () => {
+                await generateSEO(activeScript.id);
+              }}
+              isGenerating={isGenerating}
+              onNotification={showNotification}
+            />
           )}
 
-          {/* TAB 5: THUMBNAIL CONCEPTS */}
+          {/* TAB 5: THUMBNAIL CONCEPTS & STUDIO */}
           {activeTab === 'thumbnails' && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs font-mono uppercase tracking-wider text-slate-400 font-bold">
-                  High-CTR Visual Packaging Concepts ({activeScript.thumbnailConcepts?.length || 0})
-                </span>
-                <button
-                  onClick={() => generateThumbnails(activeScript.id)}
-                  disabled={isGenerating}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 transition-colors"
-                >
-                  Regenerate Thumbnails
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {activeScript.thumbnailConcepts?.map((thumb, idx) => (
-                  <div
-                    key={idx}
-                    className="p-5 rounded-2xl bg-slate-900 border border-slate-800 hover:border-cyan-500/40 transition-all space-y-4 flex flex-col justify-between"
-                  >
-                    <div className="space-y-3">
-                      {/* Concept Tag & Score */}
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-                          Concept #{idx + 1}
-                        </span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
-                          Est. CTR: {thumb.estimatedCTR || '9.4%'}
-                        </span>
-                      </div>
-
-                      {/* Text Overlay Mockup */}
-                      <div className="p-6 rounded-xl bg-gradient-to-br from-slate-950 to-slate-900 border border-slate-800 text-center flex flex-col items-center justify-center min-h-[120px]">
-                        <span className="text-base font-extrabold text-white uppercase tracking-wider bg-red-600 px-3 py-1 rounded shadow-lg">
-                          {thumb.overlayText || 'CLICK ME'}
-                        </span>
-                      </div>
-
-                      {/* Visual Description */}
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-mono font-bold uppercase text-slate-400">
-                          Visual Composition:
-                        </span>
-                        <p className="text-xs text-slate-300 leading-relaxed">
-                          {thumb.visualDescription}
-                        </p>
-                      </div>
-
-                      {/* Color Theory & Layout */}
-                      <div className="p-3 rounded-lg bg-slate-950 border border-slate-800/80 space-y-1 text-[11px]">
-                        <div className="text-slate-400">
-                          <strong className="text-indigo-300">Color Palette: </strong>
-                          {thumb.colorPalette}
-                        </div>
-                        <div className="text-slate-400">
-                          <strong className="text-cyan-300">Layout: </strong>
-                          {thumb.layoutDiagram}
-                        </div>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => handleCopy(thumb.visualDescription, `thumb-${idx}`)}
-                      className="w-full py-2 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-colors text-center"
-                    >
-                      {copiedKey === `thumb-${idx}` ? 'Copied Prompt' : 'Copy Art Prompt'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <ThumbnailStudio
+              script={activeScript}
+              onSaveThumbnails={async (thumbnails) => {
+                await saveScriptThumbnails(activeScript.id, thumbnails);
+              }}
+              onRegenerateThumbnails={async () => {
+                await generateThumbnails(activeScript.id);
+              }}
+              isGenerating={isGenerating}
+              onNotification={showNotification}
+            />
           )}
 
           {/* TAB 6: REPURPOSE TO SHORTS & REELS */}
           {activeTab === 'repurpose' && (
-            <div className="space-y-6">
-              {activeScript.repurposeVersions ? (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* YouTube Short */}
-                  <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                      <span className="text-xs font-mono font-bold uppercase text-red-400 flex items-center gap-1.5">
-                        <Video className="w-3.5 h-3.5" />
-                        YouTube Short (60s)
-                      </span>
-                      <button
-                        onClick={() =>
-                          handleCopy(activeScript.repurposeVersions?.youtubeShort || '', 'yt-short')
-                        }
-                        className="text-slate-400 hover:text-white"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed font-sans max-h-[400px] overflow-y-auto">
-                      {activeScript.repurposeVersions.youtubeShort}
-                    </pre>
-                  </div>
+            <ShortsRepurposeStudio
+              script={activeScript}
+              onSaveShorts={async (shorts) => {
+                await saveScriptRepurposedShorts(activeScript.id, shorts);
+              }}
+              onNotification={showNotification}
+            />
+          )}
 
-                  {/* Instagram Reel */}
-                  <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                      <span className="text-xs font-mono font-bold uppercase text-pink-400 flex items-center gap-1.5">
-                        <Smartphone className="w-3.5 h-3.5" />
-                        Instagram Reel (30–45s)
-                      </span>
-                      <button
-                        onClick={() =>
-                          handleCopy(activeScript.repurposeVersions?.instagramReel || '', 'ig-reel')
-                        }
-                        className="text-slate-400 hover:text-white"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed font-sans max-h-[400px] overflow-y-auto">
-                      {activeScript.repurposeVersions.instagramReel}
-                    </pre>
-                  </div>
+          {/* TAB 7: PUBLISH TO YOUTUBE */}
+          {activeTab === 'publish' && (
+            <YouTubePublishStudio
+              script={activeScript}
+              seo={activeScript.seo}
+              thumbnailConcepts={activeScript.thumbnailConcepts}
+              onNotification={showNotification}
+            />
+          )}
 
-                  {/* Instagram Story / Slides */}
-                  <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                      <span className="text-xs font-mono font-bold uppercase text-amber-400 flex items-center gap-1.5">
-                        <Layers className="w-3.5 h-3.5" />
-                        Story Sequence (3–5 Slides)
-                      </span>
-                      <button
-                        onClick={() =>
-                          handleCopy(activeScript.repurposeVersions?.instagramStory || '', 'ig-story')
-                        }
-                        className="text-slate-400 hover:text-white"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <pre className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 whitespace-pre-wrap leading-relaxed font-sans max-h-[400px] overflow-y-auto">
-                      {activeScript.repurposeVersions.instagramStory}
-                    </pre>
-                  </div>
-                </div>
-              ) : (
-                <div className="py-12 text-center space-y-3">
-                  <p className="text-xs text-slate-400">
-                    Repurpose versions not generated yet for this script.
-                  </p>
-                  <button
-                    onClick={() => repurposeScript(activeScript.id)}
-                    className="px-4 py-2 rounded-xl text-xs font-bold bg-cyan-500 text-slate-950"
-                  >
-                    Repurpose for Shorts & Reels
-                  </button>
-                </div>
-              )}
-            </div>
+          {/* TAB 8: FILM INTELLIGENCE & STORY BIBLE */}
+          {activeTab === 'film_bible' && (
+            <FilmIntelligenceStudio
+              script={activeScript}
+              onSaveBible={async (bible) => {
+                await saveFilmStoryBible(activeScript.id, bible);
+              }}
+              onNotification={showNotification}
+            />
           )}
         </div>
       )}
