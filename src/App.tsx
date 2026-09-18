@@ -33,7 +33,7 @@ import { Cpu, Loader2 } from 'lucide-react';
 function AppContent() {
   const { currentRoute, navigate } = useRouter();
   const { theme } = useTheme();
-  const { authState, user } = useAuth();
+  const { authState } = useAuth();
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     try {
@@ -47,7 +47,6 @@ function AppContent() {
   const [isCommandModalOpen, setIsCommandModalOpen] = useState(false);
   const [isRoadmapModalOpen, setIsRoadmapModalOpen] = useState(false);
 
-  // Authentication guard & route protection
   useEffect(() => {
     if (authState === 'LOADING') return;
 
@@ -70,7 +69,6 @@ function AppContent() {
     });
   };
 
-  // Global keyboard shortcut for Command Palette (⌘K or Ctrl+K)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -82,7 +80,6 @@ function AppContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Loading Splash Screen
   if (authState === 'LOADING') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-slate-100">
@@ -102,7 +99,6 @@ function AppContent() {
     );
   }
 
-  // Standalone Full-Screen Login Page
   if (currentRoute === '/login') {
     return <LoginPage />;
   }
@@ -163,28 +159,23 @@ function AppContent() {
         theme === 'light' ? 'bg-slate-50 text-slate-900' : 'bg-[#07090e] text-slate-100'
       }`}
     >
-      {/* Collapsible Left Sidebar */}
       <Sidebar
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={handleToggleSidebar}
         onOpenRoadmap={() => setIsRoadmapModalOpen(true)}
       />
 
-      {/* Main App Workspace */}
       <div className="flex-1 flex flex-col min-w-0 min-h-screen">
-        {/* Top Bar */}
         <TopBar
           onOpenCommand={() => setIsCommandModalOpen(true)}
           onOpenNewProject={() => setIsNewProjectModalOpen(true)}
         />
 
-        {/* Dynamic Page Content */}
         <main className="flex-1 p-6 md:p-8 max-w-7xl w-full mx-auto">
           {renderActivePage()}
         </main>
       </div>
 
-      {/* Modals & Overlays */}
       <NewProjectModal
         isOpen={isNewProjectModalOpen}
         onClose={() => setIsNewProjectModalOpen(false)}
