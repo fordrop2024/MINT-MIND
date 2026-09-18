@@ -1,69 +1,49 @@
-import React, { useState } from 'react';
-import { Play, Sparkles, Sliders, CheckCircle2, Download, RefreshCw, AlertCircle } from 'lucide-react';
-import Groq from 'groq-sdk';
+import React, { useState, useEffect } from 'react';
+import { FileText, Download, Save, Copy, Check, Sparkles, Trash2 } from 'lucide-react';
 
-interface PlaceholderPageProps {
+interface ScriptStudioProps {
   route?: string;
-  onOpenRoadmap?: () => void;
 }
 
-export function PlaceholderPage({ route = '/studio' }: PlaceholderPageProps) {
-  const [inputText, setInputText] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [outputResult, setOutputResult] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+export function PlaceholderPage({ route = '/script' }: ScriptStudioProps) {
+  const [scriptTitle, setScriptTitle] = useState('My New Video Script');
+  const [scriptContent, setScriptContent] = useState(
+    `[SCENE 1: HOOK]\nVisual: Fast cuts of high-tech workspaces.\nVoiceover: "What if you could build an entire app in 10 minutes?"\n\n[SCENE 2: INTRODUCTION]\nVisual: Host speaking directly to camera.\nVoiceover: "Today, we are diving deep into automated workflow pipelines."\n\n[SCENE 3: CALL TO ACTION]\nVisual: On-screen subscribe graphics.\nVoiceover: "Don't forget to like and subscribe for more content!"`
+  );
+  const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
 
-  const cleanTitle = route.replace('/', '').replace('-', ' ').toUpperCase();
-
-  const getSystemPrompt = (currentRoute: string) => {
-    switch (currentRoute) {
-      case '/seo':
-        return "You are an expert YouTube SEO strategist. Generate high-ranking tags, optimized video descriptions, and click-worthy titles with search volume predictions.";
-      case '/ideas':
-        return "You are a Viral Content Strategist. Generate 5 unique, high-CTR content ideas with viral hooks and audience retention angles.";
-      case '/script':
-        return "You are a Professional Screenwriter. Generate a full video script with scene directions, voiceover lines, and visual cues.";
-      case '/repurpose':
-        return "You are a Short-Form Content Specialist. Transform long-form content into engaging 60-second YouTube Shorts/Reels scripts.";
-      default:
-        return `You are an AI assistant specialized in ${cleanTitle}. Provide structured, high-quality production outputs.`;
+  useEffect(() => {
+    const savedData = localStorage.getItem(`script_${route}`);
+    if (savedData) {
+      try {
+        const parsed = JSON.parse(savedData);
+        if (parsed.title) setScriptTitle(parsed.title);
+        if (parsed.content) setScriptContent(parsed.content);
+      } catch (e) {}
     }
+  }, [route]);
+
+  const handleSave = () => {
+    localStorage.setItem(`script_${route}`, JSON.stringify({ title: scriptTitle, content: scriptContent }));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
-  const handleProcess = async () => {
-    if (!inputText.trim()) return;
-    setIsProcessing(true);
-    setErrorMessage(null);
-    setOutputResult(null);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(`${scriptTitle}\n\n${scriptContent}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
-    try {
-      const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-      if (!apiKey) {
-        throw new Error("Groq API key missing! Please check VITE_GROQ_API_KEY in your .env file.");
-      }
-
-      const groq = new Groq({ apiKey, dangerouslyAllowBrowser: true });
-      const completion = await groq.chat.completions.create({
-        messages: [
-          {
-            role: 'system',
-            content: getSystemPrompt(route),
-          },
-          {
-            role: 'user',
-            content: inputText,
-          },
-        ],
-        model: 'llama3-70b-8192',
-      });
-
-      const responseText = completion.choices[0]?.message?.content || "No output generated.";
-      setOutputResult(responseText);
-    } catch (err: any) {
-      setErrorMessage(err?.message || "Failed to fetch response from Groq AI.");
-    } finally {
-      setIsProcessing(false);
-    }
+  const handleDownload = () => {
+    const element = document.createElement("a");
+    const file = new Blob([`${scriptTitle}\n\n====================\n\n${scriptContent}`], { type: 'text/plain' });
+    element.href = URL.createObjectURL(file);
+    element.download = `${scriptTitle.toLowerCase().replace(/\s+/g, '_')}.txt`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
   };
 
   return (
@@ -71,90 +51,62 @@ export function PlaceholderPage({ route = '/studio' }: PlaceholderPageProps) {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900/60 p-6 rounded-2xl border border-slate-800 backdrop-blur-xl">
         <div>
           <div className="flex items-center gap-2">
-            <span className="px-2.5 py-1 text-xs font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-md">
-              GROQ AI POWERED
+            <span className="px-2.5 py-1 text-xs font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-md">
+              PRODUCTION STUDIO
             </span>
             <span className="text-xs text-slate-400 font-mono">{route}</span>
           </div>
-          <h1 className="text-2xl font-bold text-white mt-2">{cleanTitle || 'STUDIO WORKSPACE'}</h1>
+          <h1 className="text-2xl font-bold text-white mt-2">SCRIPT & CONTENT EDITOR</h1>
           <p className="text-slate-400 text-sm mt-1">
-            Generate and process assets in real-time using Llama 3.3 70B AI.
+            Build, structure, and export production-ready video scripts instantly.
           </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleCopy}
+            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono rounded-lg flex items-center gap-2 border border-slate-700 transition"
+          >
+            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+            {copied ? 'Copied!' : 'Copy Script'}
+          </button>
+          
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-mono rounded-lg flex items-center gap-2 transition"
+          >
+            {saved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+            {saved ? 'Saved Local!' : 'Save Progress'}
+          </button>
+
+          <button
+            onClick={handleDownload}
+            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-mono rounded-lg flex items-center gap-2 transition"
+          >
+            <Download className="w-4 h-4" /> Export .TXT
+          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1 bg-slate-900/40 p-5 rounded-xl border border-slate-800/80 space-y-4">
-          <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-            <Sliders className="w-4 h-4 text-cyan-400" /> Control Parameters
-          </h3>
-
-          <div>
-            <label className="block text-xs font-mono text-slate-400 mb-2">Prompt Input</label>
-            <textarea
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder={`Enter prompt for ${cleanTitle}...`}
-              rows={5}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-
-          <button
-            onClick={handleProcess}
-            disabled={isProcessing || !inputText.trim()}
-            className="w-full py-2.5 px-4 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-medium rounded-lg text-sm transition flex items-center justify-center gap-2 disabled:opacity-50"
-          >
-            {isProcessing ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" /> Calling Groq AI...
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4" /> Run {cleanTitle || 'Engine'}
-              </>
-            )}
-          </button>
+      <div className="bg-slate-900/40 p-6 rounded-2xl border border-slate-800/80 space-y-4">
+        <div>
+          <label className="block text-xs font-mono text-slate-400 mb-2">Project / Script Title</label>
+          <input
+            type="text"
+            value={scriptTitle}
+            onChange={(e) => setScriptTitle(e.target.value)}
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-lg font-semibold text-white focus:outline-none focus:border-indigo-500"
+          />
         </div>
 
-        <div className="lg:col-span-2 bg-slate-900/40 p-5 rounded-xl border border-slate-800/80 min-h-[300px] flex flex-col justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2 mb-4">
-              <Play className="w-4 h-4 text-cyan-400" /> Live AI Output
-            </h3>
-
-            {errorMessage && (
-              <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs font-mono flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" /> {errorMessage}
-              </div>
-            )}
-
-            {outputResult ? (
-              <div className="p-4 bg-slate-950 border border-slate-800 rounded-lg space-y-3 max-h-[400px] overflow-y-auto">
-                <div className="flex items-center gap-2 text-emerald-400 text-xs font-mono">
-                  <CheckCircle2 className="w-4 h-4" /> Response Generated
-                </div>
-                <div className="text-sm text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">
-                  {outputResult}
-                </div>
-              </div>
-            ) : !errorMessage && (
-              <div className="h-48 border border-dashed border-slate-800 rounded-lg flex flex-col items-center justify-center text-slate-500 text-sm">
-                Enter your prompt and click "Run Engine" to get real-time Groq AI results.
-              </div>
-            )}
-          </div>
-
-          {outputResult && (
-            <div className="pt-4 border-t border-slate-800/80 flex justify-end">
-              <button 
-                onClick={() => navigator.clipboard.writeText(outputResult)}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono rounded-md flex items-center gap-1.5 transition"
-              >
-                <Download className="w-3.5 h-3.5" /> Copy Output
-              </button>
-            </div>
-          )}
+        <div>
+          <label className="block text-xs font-mono text-slate-400 mb-2">Script Timeline & Visual Notes</label>
+          <textarea
+            value={scriptContent}
+            onChange={(e) => setScriptContent(e.target.value)}
+            rows={14}
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-4 text-sm text-slate-200 font-mono leading-relaxed focus:outline-none focus:border-indigo-500"
+          />
         </div>
       </div>
     </div>
