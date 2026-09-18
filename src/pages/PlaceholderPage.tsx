@@ -54,7 +54,7 @@ export function PlaceholderPage({ route = '/studio' }: PlaceholderPageProps) {
             content: inputText,
           },
         ],
-        model: 'llama-3.3-70b-versatile',
+        model: 'llama3-70b-8192',
       });
 
       const responseText = completion.choices[0]?.message?.content || "No output generated.";
